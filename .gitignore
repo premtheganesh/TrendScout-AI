@@ -54,3 +54,8 @@ TrendScout AI/
 
 # Neo4j dumps
 neo4j-db-load-*/
+
+# Internal notes, not published
+docs/
+notes/
+*.notes.md
