@@ -1,6 +1,4 @@
-"""
-Remove duplicate documents from MongoDB collections
-"""
+"""Remove duplicate documents from MongoDB collections"""
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -19,7 +17,7 @@ def remove_duplicates():
         print('=' * 70)
 
         # 1. Remove duplicate startups (by name, keep most recent)
-        print('\n1️⃣  Cleaning STARTUPS collection...')
+        print('\n1⃣ Cleaning STARTUPS collection...')
         startups = list(mongo.db.startups.find().sort('scraped_at', -1))
         seen_names = set()
         to_delete = []
@@ -33,12 +31,12 @@ def remove_duplicates():
 
         if to_delete:
             result = mongo.db.startups.delete_many({'_id': {'$in': to_delete}})
-            print(f'   ✅ Removed {result.deleted_count} duplicate startups')
+            print(f'Removed {result.deleted_count} duplicate startups')
         else:
-            print('   ✅ No duplicates found')
+            print('No duplicates found')
 
         # 2. Remove duplicate articles (by URL, keep most recent)
-        print('\n2️⃣  Cleaning ARTICLES collection...')
+        print('\n2⃣ Cleaning ARTICLES collection...')
         articles = list(mongo.db.articles.find().sort('scraped_at', -1))
         seen_urls = set()
         to_delete = []
@@ -52,12 +50,12 @@ def remove_duplicates():
 
         if to_delete:
             result = mongo.db.articles.delete_many({'_id': {'$in': to_delete}})
-            print(f'   ✅ Removed {result.deleted_count} duplicate articles')
+            print(f'Removed {result.deleted_count} duplicate articles')
         else:
-            print('   ✅ No duplicates found')
+            print('No duplicates found')
 
         # 3. Remove duplicate github repos (by full_name, keep most recent)
-        print('\n3️⃣  Cleaning GITHUB_REPOS collection...')
+        print('\n3⃣ Cleaning GITHUB_REPOS collection...')
         repos = list(mongo.db.github_repos.find().sort('scraped_at', -1))
         seen_repos = set()
         to_delete = []
@@ -71,9 +69,9 @@ def remove_duplicates():
 
         if to_delete:
             result = mongo.db.github_repos.delete_many({'_id': {'$in': to_delete}})
-            print(f'   ✅ Removed {result.deleted_count} duplicate repos')
+            print(f'Removed {result.deleted_count} duplicate repos')
         else:
-            print('   ✅ No duplicates found')
+            print('No duplicates found')
 
         # Final count
         print('\n' + '=' * 70)
@@ -84,7 +82,7 @@ def remove_duplicates():
         articles_count = mongo.db.articles.count_documents({})
         github_count = mongo.db.github_repos.count_documents({})
 
-        print(f'\n📊 Collection Statistics:')
+        print(f'\n Collection Statistics:')
         print(f'   • startups:      {startups_count:3d} documents')
         print(f'   • articles:      {articles_count:3d} documents')
         print(f'   • github_repos:  {github_count:3d} documents')
@@ -92,7 +90,7 @@ def remove_duplicates():
         print(f'   TOTAL:          {startups_count + articles_count + github_count:3d} unique documents')
         print()
         print('=' * 70)
-        print('✅ Cleanup Complete! All duplicates removed.')
+        print('Cleanup Complete! All duplicates removed.')
         print('=' * 70)
 
     finally:

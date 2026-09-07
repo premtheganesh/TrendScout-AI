@@ -1,6 +1,4 @@
-"""
-Pydantic schema for TechCrunch articles
-"""
+"""Pydantic schema for TechCrunch articles"""
 
 from pydantic import BaseModel, validator, HttpUrl
 from typing import Optional, List

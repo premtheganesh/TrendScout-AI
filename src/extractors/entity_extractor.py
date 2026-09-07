@@ -1,20 +1,4 @@
-"""
-Entity Extractor using spaCy NER (Named Entity Recognition)
-
-This module extracts structured entities from unstructured text.
-
-What it does:
-- Takes text like: "OpenAI, founded in San Francisco, raised $13B from Microsoft"
-- Extracts entities like:
-  * OpenAI → ORGANIZATION
-  * San Francisco → LOCATION (GPE = Geo-Political Entity)
-  * $13B → MONEY
-  * Microsoft → ORGANIZATION
-
-Why we need this:
-- To build the Neo4j knowledge graph, we need to know what's a company, person, location, etc.
-- spaCy automatically identifies these using AI (transformer model)
-"""
+"""Entity Extractor using spaCy NER (Named Entity Recognition)"""
 
 import spacy
 from typing import List, Dict, Optional
@@ -24,55 +8,23 @@ logger = logging.getLogger(__name__)
 
 
 class EntityExtractor:
-    """
-    Extracts named entities from text using spaCy's transformer model
-
-    Example usage:
-        extractor = EntityExtractor()
-        text = "OpenAI raised $13B from Microsoft"
-        entities = extractor.extract_entities(text)
-        # Returns: [
-        #   {'text': 'OpenAI', 'label': 'ORG', 'start': 0, 'end': 6},
-        #   {'text': '$13B', 'label': 'MONEY', 'start': 14, 'end': 18},
-        #   {'text': 'Microsoft', 'label': 'ORG', 'start': 24, 'end': 33}
-        # ]
-    """
+    """Extracts named entities from text using spaCy's transformer model"""
 
     def __init__(self, model_name: str = "en_core_web_trf"):
-        """
-        Initialize the entity extractor
-
-        Args:
-            model_name: spaCy model to use (default: en_core_web_trf = transformer model)
-
-        What happens here:
-            1. Loads the spaCy model into memory (this is the "brain")
-            2. Model stays loaded for fast repeated use
-            3. If model fails to load, raises an error
-        """
+        """Initialize the entity extractor"""
         logger.info(f"Loading spaCy model: {model_name}...")
 
         try:
             self.nlp = spacy.load(model_name)
 
-            logger.info("✅ spaCy model loaded successfully")
+            logger.info("spaCy model loaded successfully")
 
         except Exception as e:
             logger.error(f"Failed to load spaCy model: {e}")
             raise
 
     def extract_entities(self, text: str) -> List[Dict]:
-        """
-        Extract entities with mention counts
-        
-        Returns:
-            List of dicts with:
-            - entity_text: The entity text
-            - entity_type: ORG, PERSON, GPE, etc.
-            - count: How many times mentioned
-            - positions: List of (start, end) positions
-            - confidence: spaCy confidence score
-        """
+        """Extract entities with mention counts"""
         doc = self.nlp(text)
         
         # Count mentions using a dictionary
@@ -114,28 +66,7 @@ class EntityExtractor:
         text: str,
         entity_types: Optional[List[str]] = None
     ) -> Dict[str, List[str]]:
-        """
-        Extract entities grouped by type
-
-        Args:
-            text: Text to extract from
-            entity_types: List of entity types to extract (e.g., ['ORG', 'PERSON', 'GPE'])
-                         If None, extracts all types
-
-        Returns:
-            Dictionary with entity types as keys, lists of entity texts as values
-            Example:
-            {
-                'ORG': ['OpenAI', 'Microsoft', 'Y Combinator'],
-                'PERSON': ['Sam Altman', 'Elon Musk'],
-                'GPE': ['San Francisco', 'New York'],
-                'MONEY': ['$13 billion', '$500M']
-            }
-
-        Why this is useful:
-            - When building the graph, we want to group companies, people, locations separately
-            - Makes it easier to create different node types in Neo4j
-        """
+        """Extract entities grouped by type"""
 
         # Get all entities first
         all_entities = self.extract_entities(text)
@@ -160,49 +91,19 @@ class EntityExtractor:
         return grouped
 
     def get_company_names(self, text: str) -> List[str]:
-        """
-        Extract just company/organization names
-
-        Args:
-            text: Text to extract from
-
-        Returns:
-            List of company names (ORG entities)
-
-        Why a separate method:
-            - Companies are the most important entities for your project
-            - Convenience method so you don't have to filter ORG entities manually
-        """
+        """Extract just company/organization names"""
 
         entities_by_type = self.extract_entities_by_type(text, entity_types=['ORG'])
         return entities_by_type.get('ORG', [])
 
     def get_people_names(self, text: str) -> List[str]:
-        """
-        Extract just people names
-
-        Args:
-            text: Text to extract from
-
-        Returns:
-            List of person names (PERSON entities)
-        """
+        """Extract just people names"""
 
         entities_by_type = self.extract_entities_by_type(text, entity_types=['PERSON'])
         return entities_by_type.get('PERSON', [])
 
     def get_locations(self, text: str) -> List[str]:
-        """
-        Extract just locations (cities, countries, states)
-
-        Args:
-            text: Text to extract from
-
-        Returns:
-            List of locations (GPE entities)
-
-        Note: GPE = Geo-Political Entity (countries, cities, states)
-        """
+        """Extract just locations (cities, countries, states)"""
 
         entities_by_type = self.extract_entities_by_type(text, entity_types=['GPE'])
         return entities_by_type.get('GPE', [])
@@ -282,5 +183,5 @@ if __name__ == "__main__":
     print(f"Locations: {locations}")
 
     print("\n" + "=" * 70)
-    print("✅ ALL TESTS COMPLETE")
+    print("ALL TESTS COMPLETE")
     print("=" * 70)

@@ -11,26 +11,12 @@ class StartupScraper(BaseScraper):
     """Scraper for AI startup information"""
     
     def __init__(self, headless: bool = True):
-        """
-        Initialize startup scraper
-        
-        Args:
-            headless: Run browser in headless mode
-        """
+        """Initialize startup scraper"""
         super().__init__(headless)
         self.mongo = MongoDBClient()
     
     def extract_company_data(self, soup: BeautifulSoup, url: str) -> Optional[Dict]:
-        """
-        Extract company data from page HTML
-        
-        Args:
-            soup: BeautifulSoup object of the page
-            url: URL of the company page
-            
-        Returns:
-            Dict with company data or None if extraction fails
-        """
+        """Extract company data from page HTML"""
         try: 
             title = soup.find('title')
             h1 = soup.find('h1')
@@ -49,15 +35,7 @@ class StartupScraper(BaseScraper):
             return None
     
     def scrape_company(self, url: str) -> Optional[str]:
-        """
-        Scrape a single company page and save to MongoDB
-        
-        Args:
-            url: URL of company page
-            
-        Returns:
-            MongoDB document ID if successful, None otherwise
-        """
+        """Scrape a single company page and save to MongoDB"""
         logger.info(f"Scraping {url}")
     
         # Navigate
@@ -80,15 +58,7 @@ class StartupScraper(BaseScraper):
         return doc_id
     
     def scrape_multiple(self, urls: list) -> int:
-        """
-        Scrape multiple company pages
-        
-        Args:
-            urls: List of company URLs
-            
-        Returns:
-            Number of companies successfully scraped
-        """
+        """Scrape multiple company pages"""
         count = 0
     
         for url in urls:

@@ -1,7 +1,4 @@
-"""
-TechCrunch RSS Feed Scraper
-Scrapes news articles from TechCrunch RSS feed
-"""
+"""TechCrunch RSS Feed Scraper Scrapes news articles from TechCrunch RSS feed"""
 import requests
 from bs4 import BeautifulSoup
 from src.database.mongo_client import MongoDBClient
@@ -25,15 +22,7 @@ class TechCrunchScraper:
         }
 
     def extract_article_data(self, item) -> Optional[Dict]:
-        """
-        Extract article data from RSS feed item
-
-        Args:
-            item: BeautifulSoup element representing an RSS item
-
-        Returns:
-            Dict with article data or None
-        """
+        """Extract article data from RSS feed item"""
         try:
             # Extract title
             title_elem = item.find('title')
@@ -88,14 +77,7 @@ class TechCrunchScraper:
 
     def _extract_company_mentions(self, text: str) -> List[str]:
         """
-        Extract company mentions from text (simple pattern matching)
-        This is a basic approach - will be enhanced with spaCy NER later
-
-        Args:
-            text: Text to extract company names from
-
-        Returns:
-            List of potential company names
+        Extract company mentions from text (simple pattern matching) This is a basic approach - will be enhanced with spaCy NER later
         """
         # Common patterns for company names in headlines
         companies = []
@@ -118,15 +100,7 @@ class TechCrunchScraper:
         return companies
 
     def scrape_articles(self, limit: int = 10) -> int:
-        """
-        Scrape articles from TechCrunch RSS feed
-
-        Args:
-            limit: Maximum number of articles to scrape
-
-        Returns:
-            Number of articles successfully scraped
-        """
+        """Scrape articles from TechCrunch RSS feed"""
         logger.info(f"Scraping TechCrunch RSS feed: {self.rss_url}")
 
         try:
@@ -149,7 +123,7 @@ class TechCrunchScraper:
                     try:
                         # Insert into MongoDB articles collection
                         doc_id = self.mongo.db.articles.insert_one(data).inserted_id
-                        logger.info(f"✅ Saved: {data['title'][:60]}...")
+                        logger.info(f"Saved: {data['title'][:60]}...")
                         count += 1
                     except Exception as e:
                         logger.error(f"Failed to save article: {e}")

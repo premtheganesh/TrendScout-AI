@@ -26,7 +26,7 @@ class MongoDBClient:
         data['updated_at'] = datetime.utcnow()
 
         result = self.db.startups.insert_one(data)
-        logger.info(f"✅ Inserted startup: {data.get('name')}")
+        logger.info(f"Inserted startup: {data.get('name')}")
         
         return str(result.inserted_id)
     
@@ -45,7 +45,7 @@ class MongoDBClient:
             {"name": name},
             {"$set": update_data}
         )
-        logger.info(f"✅ Updated startup: {name}")
+        logger.info(f"Updated startup: {name}")
     
     # ===== LINKEDIN OPERATIONS =====
     
@@ -89,4 +89,4 @@ class MongoDBClient:
     def close(self):
         """Close MongoDB connection"""
         self.client.close()
-        logger.info("❌ Closed MongoDB connection")
+        logger.info("Closed MongoDB connection")

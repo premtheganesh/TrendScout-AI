@@ -19,15 +19,7 @@ class YCombinatorScraper(BaseScraper):
         self.base_url = "https://www.ycombinator.com"
 
     def extract_company_card(self, card) -> Optional[Dict]:
-        """
-        Extract company data from a YC company card
-
-        Args:
-            card: BeautifulSoup element representing a company card (an <a> tag)
-
-        Returns:
-            Dict with company data or None
-        """
+        """Extract company data from a YC company card"""
         try:
             # Extract company name
             # Looking for <span> with class containing '_coName'
@@ -84,15 +76,7 @@ class YCombinatorScraper(BaseScraper):
             return None
 
     def scrape_yc_ai_companies(self, limit: int = 10) -> int:
-        """
-        Scrape AI companies from Y Combinator directory
-
-        Args:
-            limit: Maximum number of companies to scrape
-
-        Returns:
-            Number of companies successfully scraped
-        """
+        """Scrape AI companies from Y Combinator directory"""
         # Use the filtered URL with B2B and recent batches
         url = "https://www.ycombinator.com/companies?batch=Fall%202025&batch=Summer%202025&batch=Spring%202025&batch=Winter%202025&industry=B2B&regions=United%20States%20of%20America"
 
@@ -120,7 +104,7 @@ class YCombinatorScraper(BaseScraper):
             if data and data['name'] != 'Unknown':
                 try:
                     doc_id = self.mongo.insert_startup(data)
-                    logger.info(f"✅ Saved: {data['name']} ({data.get('yc_batch', 'N/A')})")
+                    logger.info(f"Saved: {data['name']} ({data.get('yc_batch', 'N/A')})")
                     count += 1
                 except Exception as e:
                     logger.error(f"Failed to save {data.get('name')}: {e}")

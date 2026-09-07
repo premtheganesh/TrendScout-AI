@@ -1,21 +1,4 @@
-"""
-Setup Neo4j Schema - Constraints and Indexes
-
-This script:
-1. Creates constraints to ensure data uniqueness
-2. Creates indexes for fast queries
-3. Prints the schema structure
-
-Why we're doing this:
-- Constraints prevent duplicate nodes (e.g., two "Google" entities)
-- Indexes make queries 100x faster
-- Schema defines the structure of our knowledge graph
-
-What gets created:
-- Node labels: Startup, Article, GitHubRepo, Entity
-- Constraints on unique IDs
-- Indexes on commonly queried fields
-"""
+"""Setup Neo4j Schema - Constraints and Indexes"""
 
 import sys
 import os
@@ -29,18 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_constraints(neo4j):
-    """
-    Create uniqueness constraints on node IDs
-
-    Why constraints:
-    - Prevent duplicate nodes
-    - Automatically create indexes
-    - Enforce data integrity
-
-    Example:
-        Without constraint: Could have two nodes for "Google"
-        With constraint: Only one "Google" entity allowed
-    """
+    """Create uniqueness constraints on node IDs"""
 
     print("\n" + "=" * 70)
     print("CREATING CONSTRAINTS")
@@ -77,26 +49,15 @@ def create_constraints(neo4j):
         try:
             neo4j.run_write_query(constraint)
             constraint_name = constraint.split('\n')[1].strip().split()[2]
-            print(f"  ✅ [{i}] Created constraint: {constraint_name}")
+            print(f"[{i}] Created constraint: {constraint_name}")
         except Exception as e:
-            print(f"  ⚠️  [{i}] Constraint may already exist: {e}")
+            print(f"[{i}] Constraint may already exist: {e}")
 
     logger.info("Constraints created successfully")
 
 
 def create_indexes(neo4j):
-    """
-    Create indexes for fast queries
-
-    Why indexes:
-    - Speed up queries by 100x or more
-    - Essential for large datasets
-    - Automatically used by Neo4j query planner
-
-    Example:
-        Without index: Query "find Startup with name='Suno'" scans ALL nodes
-        With index: Query uses index, finds it instantly
-    """
+    """Create indexes for fast queries"""
 
     print("\n" + "=" * 70)
     print("CREATING INDEXES")
@@ -137,6 +98,25 @@ def create_indexes(neo4j):
         """
         CREATE INDEX entity_mentions_index IF NOT EXISTS
         FOR (e:Entity) ON (e.mention_count)
+        """,
+
+        # doc_id is the uniform document identifier carried by all three
+        # document labels, so graph-expansion retrieval can traverse across
+        # them with one pattern. These back the
+        # `WHERE d.doc_id IN $seed_ids` lookup in
+        # src/search/graph_expansion.py — without them that becomes a full
+        # label scan on every search request.
+        """
+        CREATE INDEX startup_doc_id_index IF NOT EXISTS
+        FOR (s:Startup) ON (s.doc_id)
+        """,
+        """
+        CREATE INDEX article_doc_id_index IF NOT EXISTS
+        FOR (a:Article) ON (a.doc_id)
+        """,
+        """
+        CREATE INDEX repo_doc_id_index IF NOT EXISTS
+        FOR (r:GitHubRepo) ON (r.doc_id)
         """
     ]
 
@@ -144,17 +124,15 @@ def create_indexes(neo4j):
         try:
             neo4j.run_write_query(index)
             index_name = index.split('\n')[1].strip().split()[2]
-            print(f"  ✅ [{i}] Created index: {index_name}")
+            print(f"[{i}] Created index: {index_name}")
         except Exception as e:
-            print(f"  ⚠️  [{i}] Index may already exist: {e}")
+            print(f"[{i}] Index may already exist: {e}")
 
     logger.info("Indexes created successfully")
 
 
 def print_schema_info(neo4j):
-    """
-    Print current schema: constraints and indexes
-    """
+    """Print current schema: constraints and indexes"""
 
     print("\n" + "=" * 70)
     print("CURRENT SCHEMA")
@@ -174,9 +152,7 @@ def print_schema_info(neo4j):
 
 
 def print_planned_schema():
-    """
-    Print what our graph will look like after data import
-    """
+    """Print what our graph will look like after data import"""
 
     print("\n" + "=" * 70)
     print("PLANNED GRAPH SCHEMA")
@@ -267,9 +243,9 @@ def main():
     print("SUCCESS SCHEMA SETUP COMPLETE")
     print("=" * 70)
     print("\nWhat just happened:")
-    print("  ✅ Created constraints to prevent duplicate nodes")
-    print("  ✅ Created indexes for fast queries")
-    print("  ✅ Database is ready for data import")
+    print("Created constraints to prevent duplicate nodes")
+    print("Created indexes for fast queries")
+    print("Database is ready for data import")
     print("\nNext steps:")
     print("  1. Review the schema above")
     print("  2. Ready for Sub-Phase 2.4 (MongoDB → Neo4j ETL)")

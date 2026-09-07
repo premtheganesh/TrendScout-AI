@@ -1,19 +1,4 @@
-"""
-Embedding Generator using Sentence Transformers
-
-This module converts text into vector embeddings (arrays of numbers that capture meaning).
-
-What it does:
-- Takes text like "AI music generation startup"
-- Converts it to a vector: [0.2, 0.8, 0.1, ...]  (384 numbers)
-- Similar meanings produce similar vectors
-- Enables semantic search (finding meaning, not just keywords)
-
-Why we need this:
-- Find similar content even if words don't match exactly
-- Search "AI music" and find "Suno" (which does AI music)
-- Powers intelligent recommendation systems
-"""
+"""Text embeddings using sentence-transformers (E5-base-v2)."""
 
 from sentence_transformers import SentenceTransformer
 import numpy as np
@@ -24,71 +9,36 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingGenerator:
-    """
-    Generate vector embeddings from text using Sentence Transformers
+    """Generate vector embeddings from text using Sentence Transformers"""
 
-    Model: all-MiniLM-L6-v2
-    - Fast (can process 1000s of docs per second)
-    - Accurate (understands semantic similarity)
-    - Small (90MB download)
-    - Free and open-source
-
-    Output: 384-dimensional vectors
-
-    Usage:
-        generator = EmbeddingGenerator()
-        vector = generator.generate_embedding("AI startup in SF")
-        # Returns: numpy array of shape (384,)
-    """
+    QUERY_PREFIX = "query: "
+    PASSAGE_PREFIX = "passage: "
 
     def __init__(self, model_name: str = 'intfloat/e5-base-v2'):
-        """
-        Initialize embedding generator
-
-        Args:
-            model_name: Sentence transformer model to use
-                       Default: 'intfloat/e5-base-v2' (fast and accurate)
-
-        What happens:
-            1. Downloads model (first time only, ~90MB)
-            2. Loads model into memory
-            3. Ready to generate embeddings
-        """
+        """Initialize embedding generator"""
         logger.info(f"Loading embedding model: {model_name}...")
 
         try:
             self.model = SentenceTransformer(model_name)
             self.dimension = self.model.get_sentence_embedding_dimension()
 
-            logger.info(f"✅ Model loaded successfully")
+            logger.info(f"Model loaded successfully")
             logger.info(f"   Embedding dimension: {self.dimension}")
 
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
             raise
 
-    def generate_embedding(self, text: str) -> np.ndarray:
-        """
-        Generate embedding vector for a single text
-
-        Args:
-            text: Text to convert to embedding
-                  Example: "Suno is an AI music generation startup"
-
-        Returns:
-            numpy array of shape (384,)
-            Example: array([0.2, 0.8, 0.1, ...])
-
-        How it works:
-            1. Tokenize text into words
-            2. Convert words to numbers
-            3. Pass through neural network
-            4. Output: vector that captures meaning
-        """
+    def generate_embedding(self, text: str, prefix: str = "") -> np.ndarray:
+        """Generate embedding vector for a single text"""
 
         if not text or not text.strip():
             logger.warning("Empty text provided, returning zero vector")
             return np.zeros(self.dimension)
+
+        # Apply the E5 prefix unless the caller already did
+        if prefix and not text.lstrip().lower().startswith(prefix.strip().lower()):
+            text = prefix + text.strip()
 
         try:
             # Generate embedding
@@ -104,32 +54,53 @@ class EmbeddingGenerator:
             logger.error(f"Error generating embedding: {e}")
             return np.zeros(self.dimension)
 
-    def generate_embeddings_batch(self, texts: List[str], show_progress: bool = True) -> np.ndarray:
-        """
-        Generate embeddings for multiple texts at once (faster than one-by-one)
+    # The FAISS index is built with embed_passage(); changing either side
+    # requires rebuilding it with scripts/build_indexes.py.
 
-        Args:
-            texts: List of texts to convert
-                  Example: ["AI startup", "Music generation", "Pizza delivery"]
-            show_progress: Show progress bar during encoding
+    def embed_query(self, text: str) -> np.ndarray:
+        """Encode a user search query with the E5 "query: " prefix."""
+        return self.generate_embedding(text, prefix=self.QUERY_PREFIX)
 
-        Returns:
-            numpy array of shape (num_texts, 384)
-            Example: array([[0.2, 0.8, ...], [0.3, 0.7, ...], ...])
+    def embed_passage(self, text: str) -> np.ndarray:
+        """Encode a document/passage with the E5 "passage: " prefix."""
+        return self.generate_embedding(text, prefix=self.PASSAGE_PREFIX)
 
-        Why batch processing is faster:
-            - GPU/CPU can process multiple texts in parallel
-            - Reduces overhead
-            - 10x faster than processing one-by-one
-        """
+    def embed_passages_batch(
+        self,
+        texts: List[str],
+        show_progress: bool = True
+    ) -> np.ndarray:
+        """Encode many documents at once with the E5 "passage: " prefix."""
+        return self.generate_embeddings_batch(
+            texts,
+            show_progress=show_progress,
+            prefix=self.PASSAGE_PREFIX
+        )
+
+
+    def generate_embeddings_batch(
+        self,
+        texts: List[str],
+        show_progress: bool = True,
+        prefix: str = ""
+    ) -> np.ndarray:
+        """Generate embeddings for multiple texts at once (faster than one-by-one)"""
 
         if not texts:
             logger.warning("Empty text list provided")
             return np.array([])
 
         try:
-            # Filter out empty texts
-            valid_texts = [text if text and text.strip() else "" for text in texts]
+            # Filter out empty texts, applying the E5 prefix to the non-empty ones
+            valid_texts = []
+            for text in texts:
+                if text and text.strip():
+                    t = text.strip()
+                    if prefix and not t.lower().startswith(prefix.strip().lower()):
+                        t = prefix + t
+                    valid_texts.append(t)
+                else:
+                    valid_texts.append("")
 
             # Generate embeddings for all texts at once
             embeddings = self.model.encode(
@@ -148,30 +119,7 @@ class EmbeddingGenerator:
             return np.array([])
 
     def compute_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-        """
-        Compute similarity between two embeddings (cosine similarity)
-
-        Args:
-            embedding1: First embedding vector
-            embedding2: Second embedding vector
-
-        Returns:
-            Similarity score between -1 and 1
-            - 1.0 = identical meaning
-            - 0.0 = unrelated
-            - -1.0 = opposite meaning
-
-        How cosine similarity works:
-            - Measures angle between two vectors
-            - Similar vectors point in same direction
-            - Different vectors point in different directions
-
-        Example:
-            emb1 = generate_embedding("AI music startup")
-            emb2 = generate_embedding("Suno creates AI songs")
-            similarity = compute_similarity(emb1, emb2)
-            # Result: ~0.85 (very similar!)
-        """
+        """Compute similarity between two embeddings (cosine similarity)"""
 
         # Cosine similarity = dot product (since vectors are normalized)
         similarity = np.dot(embedding1, embedding2)
@@ -183,32 +131,10 @@ class EmbeddingGenerator:
         candidate_embeddings: np.ndarray,
         top_k: int = 5
     ) -> List[tuple]:
-        """
-        Find most similar embeddings to a query
-
-        Args:
-            query_embedding: The search query vector (384,)
-            candidate_embeddings: All vectors to search through (N, 384)
-            top_k: Number of results to return
-
-        Returns:
-            List of (index, similarity_score) tuples
-            Sorted by similarity (highest first)
-
-        Example:
-            query = generate_embedding("AI music startup")
-            candidates = generate_embeddings_batch([
-                "Suno creates AI songs",
-                "Pizza delivery service",
-                "Music generation AI"
-            ])
-            results = find_most_similar(query, candidates, top_k=2)
-            # Returns: [(0, 0.85), (2, 0.82)]
-            # Indices 0 and 2 are most similar
-        """
+        """Find most similar embeddings to a query"""
 
         # Compute similarity with all candidates
-        # Matrix multiplication: (384,) @ (N, 384).T = (N,)
+        # Matrix multiplication: (768,) @ (N, 768).T = (N,)
         similarities = np.dot(candidate_embeddings, query_embedding)
 
         # Get top k indices
@@ -297,7 +223,7 @@ if __name__ == "__main__":
         print(f"  {idx+1}. '{texts[idx]}' (score: {score:.3f})")
 
     print("\n" + "=" * 70)
-    print("✅ ALL TESTS COMPLETE")
+    print("ALL TESTS COMPLETE")
     print("=" * 70)
     print("\nObservations:")
     print("  - AI music texts have high similarity (~0.7-0.8)")

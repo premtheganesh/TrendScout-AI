@@ -12,12 +12,7 @@ class BaseScraper:
     """Base class for all scrapers with Playwright"""
     
     def __init__(self, headless: bool = True):
-        """
-        Initialize the scraper
-        
-        Args:
-            headless: Run browser in headless mode (invisible)
-        """
+        """Initialize the scraper"""
         self.headless = headless
         self.playwright = None
         self.browser = None
@@ -25,15 +20,7 @@ class BaseScraper:
         self.page = None
     
     def start(self):
-        """
-        Start Playwright and launch browser
-        
-        Steps:
-        1. Start playwright
-        2. Launch chromium browser
-        3. Create browser context with user agent
-        4. Create new page
-        """
+        """Start Playwright and launch browser"""
         logger.info('Starting Playwright browser....')
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
@@ -47,14 +34,7 @@ class BaseScraper:
         logger.info('Browser Started')
     
     def stop(self):
-        """
-        Stop browser and cleanup
-
-        Steps:
-        1. Close browser if it exists
-        2. Stop playwright if it exists
-        3. Log message
-        """
+        """Stop browser and cleanup"""
         try:
             if self.browser:
                 self.browser.close()
@@ -70,15 +50,7 @@ class BaseScraper:
         logger.info('Browser closed')
     
     def goto(self, url: str) -> bool:
-        """
-        Navigate to a URL
-        
-        Args:
-            url: The URL to navigate to
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Navigate to a URL"""
         try:
             logger.info(f'Navigating to {url}')
             self.page.goto(url)
@@ -89,12 +61,7 @@ class BaseScraper:
             return False
     
     def get_html(self) -> BeautifulSoup:
-        """
-        Get current page HTML as BeautifulSoup object
-        
-        Returns:
-            BeautifulSoup: Parsed HTML
-        """
+        """Get current page HTML as BeautifulSoup object"""
         content = self.page.content()
 
         soup = BeautifulSoup(content, 'html.parser')

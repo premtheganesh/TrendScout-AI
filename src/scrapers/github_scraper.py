@@ -1,7 +1,4 @@
-"""
-GitHub Repository Scraper
-Scrapes trending AI repositories from GitHub API
-"""
+"""GitHub Repository Scraper Scrapes trending AI repositories from GitHub API"""
 import requests
 import os
 from dotenv import load_dotenv
@@ -37,15 +34,7 @@ class GitHubScraper:
             self.headers["Authorization"] = f"Bearer {self.token}"
 
     def extract_repo_data(self, repo: Dict) -> Optional[Dict]:
-        """
-        Extract repository data from GitHub API response
-
-        Args:
-            repo: Dictionary from GitHub API response
-
-        Returns:
-            Dict with repository data or None
-        """
+        """Extract repository data from GitHub API response"""
         try:
             # Get primary language (may be None)
             primary_language = repo.get('language', 'Unknown')
@@ -93,17 +82,7 @@ class GitHubScraper:
         sort_by: str = "stars",
         limit: int = 10
     ) -> int:
-        """
-        Scrape trending AI repositories from GitHub
-
-        Args:
-            query: GitHub search query string
-            sort_by: Sort results by ('stars', 'forks', 'updated')
-            limit: Maximum number of repos to scrape
-
-        Returns:
-            Number of repositories successfully scraped
-        """
+        """Scrape trending AI repositories from GitHub"""
         logger.info(f"Searching GitHub for: '{query}'")
 
         params = {
@@ -147,7 +126,7 @@ class GitHubScraper:
                     try:
                         # Insert into MongoDB github_repos collection
                         doc_id = self.mongo.db.github_repos.insert_one(repo_data).inserted_id
-                        logger.info(f"✅ Saved: {repo_data['full_name']} ({repo_data['stars']} ⭐)")
+                        logger.info(f"Saved: {repo_data['full_name']} ({repo_data['stars']} )")
                         count += 1
                     except Exception as e:
                         logger.error(f"Failed to save repo: {e}")

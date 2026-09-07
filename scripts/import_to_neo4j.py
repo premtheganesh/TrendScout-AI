@@ -1,23 +1,4 @@
-"""
-Import Data from MongoDB to Neo4j (ETL Script)
-
-This script performs ETL (Extract, Transform, Load):
-1. EXTRACT - Read data from MongoDB
-2. TRANSFORM - Convert to Neo4j format
-3. LOAD - Insert into Neo4j graph database
-
-What gets imported:
-- 251 Entity nodes
-- 140 Startup nodes (with ALL fields)
-- 20 Article nodes (with ALL fields)
-- 50 GitHubRepo nodes (with ALL fields)
-- MENTIONS relationships connecting them
-
-Why we're doing this:
-- Enable graph queries like "which startups mention Google?"
-- Discover connections between entities
-- Fast lookups using Neo4j indexes
-"""
+"""Import Data from MongoDB to Neo4j (ETL Script)"""
 
 import sys
 import os
@@ -36,20 +17,7 @@ BATCH_SIZE = 100
 
 
 def import_entities(mongo, neo4j):
-    """
-    Import Entity nodes from MongoDB canonical_entities collection
-
-    Process:
-    1. Read all entities from MongoDB
-    2. Transform to Neo4j format
-    3. Use MERGE to create unique nodes
-    4. Use batch processing for speed
-
-    Cypher query explanation:
-        UNWIND $batch AS entity      - Loop through batch list
-        MERGE (e:Entity {...})        - Create node if doesn't exist (uses constraint)
-        SET e.mention_count = ...     - Update properties
-    """
+    """Import Entity nodes from MongoDB canonical_entities collection"""
 
     print("\n" + "=" * 70)
     print("IMPORTING ENTITIES")
@@ -61,7 +29,7 @@ def import_entities(mongo, neo4j):
     print(f"Found {len(entities)} entities")
 
     if len(entities) == 0:
-        print("WARNING No entities found. Run build_entity_index.py first!")
+        print("WARNING No entities found. Run scripts/extract_entities.py first!")
         return 0
 
     # TRANSFORM: Convert MongoDB docs to Neo4j format
@@ -97,18 +65,7 @@ def import_entities(mongo, neo4j):
 
 
 def import_startups(mongo, neo4j):
-    """
-    Import Startup nodes from MongoDB startups collection
-
-    This imports ALL fields from MongoDB:
-    - name, description, location, funding_amount, founded_date, website, source
-    - Any other fields in your startup documents
-
-    Why we include all fields:
-    - Rich data for queries
-    - Can filter by location, funding, etc.
-    - Preserve all information from scraping
-    """
+    """Import Startup nodes from MongoDB startups collection"""
 
     print("\n" + "=" * 70)
     print("IMPORTING STARTUPS")
@@ -155,7 +112,8 @@ def import_startups(mongo, neo4j):
     query = """
     UNWIND $batch AS startup
     MERGE (s:Startup {startup_id: startup.startup_id})
-    SET s.name = startup.name,
+    SET s.doc_id = startup.startup_id,
+        s.name = startup.name,
         s.description = startup.description,
         s.location = startup.location,
         s.funding_amount = startup.funding_amount,
@@ -171,11 +129,7 @@ def import_startups(mongo, neo4j):
 
 
 def import_articles(mongo, neo4j):
-    """
-    Import Article nodes from MongoDB articles collection
-
-    Includes all fields: title, description, url, published_date, source, etc.
-    """
+    """Import Article nodes from MongoDB articles collection"""
 
     print("\n" + "=" * 70)
     print("IMPORTING ARTICLES")
@@ -217,7 +171,8 @@ def import_articles(mongo, neo4j):
     query = """
     UNWIND $batch AS article
     MERGE (a:Article {article_id: article.article_id})
-    SET a.title = article.title,
+    SET a.doc_id = article.article_id,
+        a.title = article.title,
         a.description = article.description,
         a.url = article.url,
         a.published_date = article.published_date,
@@ -231,11 +186,7 @@ def import_articles(mongo, neo4j):
 
 
 def import_github_repos(mongo, neo4j):
-    """
-    Import GitHubRepo nodes from MongoDB github_repos collection
-
-    Includes: full_name, description, stars, forks, language, url, topics, etc.
-    """
+    """Import GitHubRepo nodes from MongoDB github_repos collection"""
 
     print("\n" + "=" * 70)
     print("IMPORTING GITHUB REPOS")
@@ -283,7 +234,8 @@ def import_github_repos(mongo, neo4j):
     query = """
     UNWIND $batch AS repo
     MERGE (r:GitHubRepo {repo_id: repo.repo_id})
-    SET r.full_name = repo.full_name,
+    SET r.doc_id = repo.repo_id,
+        r.full_name = repo.full_name,
         r.description = repo.description,
         r.stars = repo.stars,
         r.forks = repo.forks,
@@ -299,19 +251,7 @@ def import_github_repos(mongo, neo4j):
 
 
 def create_mention_relationships(mongo, neo4j):
-    """
-    Create MENTIONS relationships with mention counts and importance scores
-
-    Enhanced version that tracks:
-    - count: How many times entity mentioned in THIS document
-    - importance: Calculated relevance score (0-1)
-    - positions: Where in the text the entity appears
-
-    This connects:
-    - (Startup)-[:MENTIONS {count, importance}]->(Entity)
-    - (Article)-[:MENTIONS {count, importance}]->(Entity)
-    - (GitHubRepo)-[:MENTIONS {count, importance}]->(Entity)
-    """
+    """Create MENTIONS relationships with mention counts and importance scores"""
 
     print("\n" + "=" * 70)
     print("CREATING MENTION RELATIONSHIPS (WITH COUNTS)")
@@ -440,14 +380,7 @@ def create_mention_relationships(mongo, neo4j):
 
 
 def update_entity_statistics(neo4j):
-    """
-    Update Entity nodes with global mention statistics
-    
-    Calculates:
-    - total_mentions: Sum of all mention counts across all documents
-    - document_count: Number of different documents mentioning this entity
-    - avg_importance: Average importance score
-    """
+    """Update Entity nodes with global mention statistics"""
     query = """
     MATCH (e:Entity)
     OPTIONAL MATCH ()-[m:MENTIONS]->(e)
@@ -468,9 +401,7 @@ def update_entity_statistics(neo4j):
 
 
 def print_graph_statistics(neo4j):
-    """
-    Print statistics about the graph we just created
-    """
+    """Print statistics about the graph we just created"""
 
     print("\n" + "=" * 70)
     print("GRAPH STATISTICS")
@@ -582,11 +513,11 @@ def main():
     print("SUCCESS ETL COMPLETE")
     print("=" * 70)
     print(f"\nImported in {duration:.2f} seconds:")
-    print(f"  ✅ {entity_count} entities")
-    print(f"  ✅ {startup_count} startups")
-    print(f"  ✅ {article_count} articles")
-    print(f"  ✅ {repo_count} GitHub repos")
-    print(f"  ✅ {relationship_count} MENTIONS relationships")
+    print(f"{entity_count} entities")
+    print(f"{startup_count} startups")
+    print(f"{article_count} articles")
+    print(f"{repo_count} GitHub repos")
+    print(f"{relationship_count} MENTIONS relationships")
 
     print("\nNext steps:")
     print("  1. Open Neo4j Browser: http://localhost:7474")

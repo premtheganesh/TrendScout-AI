@@ -47,3 +47,10 @@ logs/
 # Temporary files
 tmp/
 temp/
+
+# Friend's reference repo — kept locally, never committed
+Transcout AI/
+TrendScout AI/
+
+# Neo4j dumps
+neo4j-db-load-*/

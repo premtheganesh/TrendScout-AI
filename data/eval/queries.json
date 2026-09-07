@@ -1,0 +1,145 @@
+{
+  "description": "Labelled retrieval evaluation set for TrendScout AI. Relevance was assigned by reading the corpus, not by running the system, so the labels do not favour any one channel. Documents are named rather than referenced by _id so the set survives a database rebuild; scripts/evaluate_retrieval.py resolves names to ids at run time and fails loudly on a name it cannot find.",
+  "relevance_scale": {
+    "2": "directly answers the query",
+    "1": "relevant but partial or peripheral"
+  },
+  "queries": [
+    {
+      "id": "q01",
+      "query": "AI music generation",
+      "type": "semantic",
+      "note": "Suno matches lexically; the ElevenLabs article says 'AI audio' and needs the dense channel.",
+      "relevant": {"Suno": 2, "ElevenLabs strike deals with celebs to create AI audio": 2}
+    },
+    {
+      "id": "q02",
+      "query": "retrieval augmented generation framework",
+      "type": "lexical",
+      "relevant": {"truefoundry/cognita": 2, "pinecone-io/canopy": 2, "IntelLabs/fastRAG": 2, "SylphAI-Inc/AdalFlow": 1, "TaskingAI/TaskingAI": 1}
+    },
+    {
+      "id": "q03",
+      "query": "security testing for LLM agent applications",
+      "type": "semantic",
+      "relevant": {"splx-ai/agentic-radar": 2, "prompt-security/ps-fuzz": 2, "stacklok/codegate": 2, "usestrix/strix": 1, "aliasrobotics/cai": 1}
+    },
+    {
+      "id": "q04",
+      "query": "dental imaging artificial intelligence",
+      "type": "semantic",
+      "note": "Overjet's description says 'FDA-cleared AI' for dentistry; 'imaging' never appears.",
+      "relevant": {"Overjet": 2}
+    },
+    {
+      "id": "q05",
+      "query": "fine-tuning and customising large language models",
+      "type": "semantic",
+      "relevant": {"h2oai/h2o-llmstudio": 2, "stochasticai/xTuring": 2, "Leeroo-AI/mergoo": 1, "Kenza-AI/sagify": 1}
+    },
+    {
+      "id": "q06",
+      "query": "identity verification and regulatory compliance",
+      "type": "semantic",
+      "relevant": {"Persona": 2, "Drata": 2, "Silverfort": 1}
+    },
+    {
+      "id": "q07",
+      "query": "self-driving robotaxi service",
+      "type": "semantic",
+      "relevant": {"Waymo robotaxis are now giving rides on freeways in LA, San Francisco, and Phoenix": 2}
+    },
+    {
+      "id": "q08",
+      "query": "smart mattress and sleep wellness",
+      "type": "semantic",
+      "relevant": {"Eight Sleep": 2, "Open": 1}
+    },
+    {
+      "id": "q09",
+      "query": "AI platform for teachers and schools",
+      "type": "semantic",
+      "relevant": {"MagicSchool": 2, "Newsela": 2, "Campus": 1, "Sana Labs": 1}
+    },
+    {
+      "id": "q10",
+      "query": "cryptocurrency and blockchain infrastructure",
+      "type": "semantic",
+      "relevant": {"Anchorage Digital": 2, "Tenderly": 2, "Drift": 2, "Stably": 2}
+    },
+    {
+      "id": "q11",
+      "query": "second hand fashion resale and rental",
+      "type": "semantic",
+      "relevant": {"Trove": 2, "By Rotation": 2, "Maisonette": 1, "Verishop": 1}
+    },
+    {
+      "id": "q12",
+      "query": "data centre capital investment",
+      "type": "semantic",
+      "note": "British spelling of 'centre' never appears in the corpus — pure dense-retrieval territory.",
+      "relevant": {"Data centers now attract more investment than finding new oil supplies": 2, "Anthropic announces $50 billion data center plan": 2, "Microsoft-backed Veir is bringing superconductors to data centers": 1}
+    },
+    {
+      "id": "q13",
+      "query": "observability and monitoring for generative AI",
+      "type": "lexical",
+      "relevant": {"traceloop/openllmetry": 2, "vectara/hallucination-leaderboard": 1, "genai-impact/ecologits": 1}
+    },
+    {
+      "id": "q14",
+      "query": "running language models locally on device",
+      "type": "semantic",
+      "relevant": {"Picovoice/picollm": 2, "dipampaul17/KVSplit": 2, "jonigl/mcp-client-for-ollama": 1, "cognitivetech/ollama-ebook-summary": 1}
+    },
+    {
+      "id": "q15",
+      "query": "agents for robotics",
+      "type": "lexical",
+      "relevant": {"RobotecAI/rai": 2, "mbodiai/embodied-agents": 2, "Why a researcher is building robots that look and act like bats": 1}
+    },
+    {
+      "id": "q16",
+      "query": "enterprise conversational AI and natural language processing",
+      "type": "semantic",
+      "relevant": {"Kore.ai": 2, "Cohere": 2}
+    },
+    {
+      "id": "q17",
+      "query": "OpenAI copyright ruling",
+      "type": "lexical",
+      "relevant": {"Court rules that OpenAI violated German copyright law; ordered it to pay damages": 2}
+    },
+    {
+      "id": "q18",
+      "query": "Suno",
+      "type": "lexical",
+      "note": "A bare proper noun — the case where BM25 should dominate.",
+      "relevant": {"Suno": 2}
+    },
+    {
+      "id": "q19",
+      "query": "ecommerce personalisation and online shopping experience",
+      "type": "semantic",
+      "relevant": {"FERMAT": 2, "Daydream": 2, "Whatnot": 1, "Verishop": 1}
+    },
+    {
+      "id": "q20",
+      "query": "no-code platform for building apps without engineers",
+      "type": "semantic",
+      "relevant": {"Glide": 2, "Torq": 1, "h2oai/h2o-llmstudio": 1}
+    },
+    {
+      "id": "q21",
+      "query": "multi-agent orchestration framework",
+      "type": "lexical",
+      "relevant": {"dynamiq-ai/dynamiq": 2, "massgen/MassGen": 2, "souvikmajumder26/Multi-Agent-Medical-Assistant": 1, "langchain-ai/langchain": 1, "eidolon-ai/eidolon": 1}
+    },
+    {
+      "id": "q22",
+      "query": "tax preparation and financial filing",
+      "type": "semantic",
+      "relevant": {"Flyfin": 2}
+    }
+  ]
+}

@@ -1,138 +1,78 @@
 """
-TrendScout AI - Production FastAPI Backend
+TrendScout AI REST API.
 
-This API exposes your Phase 1-2 work (data collection, knowledge graph, embeddings)
-as RESTful endpoints that can be called by:
-- LangFlow conversational agent
-- Streamlit UI
-- Other applications
-
-LEARNING GUIDE - Read the comments marked with 📚
-
-What you'll learn:
-1. How to integrate FastAPI with existing Python classes
-2. Pydantic models for data validation
-3. Error handling with HTTPException
-4. CORS for frontend integration
-5. Startup/shutdown lifecycle hooks
-
-To run:
-    cd "/Users/premg/Desktop/PremG/Semantic Web Mining"
-    .venv/bin/python src/api/main.py
-
-Then visit:
-    http://localhost:8000/docs  (Interactive API documentation)
+    python src/api/main.py
+    http://localhost:8000/docs
 """
 
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-# 📚 LEARNING: Import FastAPI components
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Dict, Optional, Any
 import logging
 
-# 📚 LEARNING: Import your existing classes
-# This is the key - we're not rewriting code, just exposing it via API!
 from src.search.hybrid_search import HybridSearchEngine
 from src.database.neo4j_client import Neo4jClient
 from src.embeddings.embedding_generator import EmbeddingGenerator
+from src.rag import RAGPipeline
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# 📚 LEARNING SECTION 1: CREATE FASTAPI APP
-# =============================================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load models and indexes once at boot; close connections on exit."""
+    global search_engine, neo4j_client, embedding_generator, rag_pipeline
 
-# Create the FastAPI application instance
-app = FastAPI(
-    title="TrendScout AI API",
-    description="API for AI startup discovery using hybrid search and knowledge graphs",
-    version="1.0.0"
-)
-
-# 📚 LEARNING: CORS (Cross-Origin Resource Sharing)
-# Why we need this:
-# - Your Streamlit UI (running on port 8501) wants to call this API (port 8000)
-# - Browsers block this by default for security
-# - CORS middleware tells browser "it's okay, allow it"
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 📚 In production, specify exact origins like ["http://localhost:8501"]
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow GET, POST, etc.
-    allow_headers=["*"],  # Allow all headers
-)
-
-
-# =============================================================================
-# 📚 LEARNING SECTION 2: GLOBAL VARIABLES (Initialized at startup)
-# =============================================================================
-
-# 📚 LEARNING: Why None?
-# We don't initialize here because loading models takes time
-# We initialize in the @app.on_event("startup") function below
-search_engine = None
-neo4j_client = None
-embedding_generator = None
-
-
-# =============================================================================
-# 📚 LEARNING SECTION 3: LIFECYCLE HOOKS
-# =============================================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """
-    📚 LEARNING: Startup Hook
-
-    This function runs ONCE when the server starts.
-
-    Why we need this:
-    - Loading models (HybridSearchEngine, embeddings) takes time
-    - We do it once at startup, not on every request
-    - Makes subsequent requests fast
-
-    The 'global' keyword lets us modify the global variables
-    """
-    global search_engine, neo4j_client, embedding_generator
-
-    logger.info("🚀 Starting TrendScout AI API...")
+    logger.info("Starting TrendScout AI API...")
 
     try:
-        # 📚 Initialize hybrid search engine (loads FAISS index, embeddings)
         logger.info("Loading hybrid search engine...")
         search_engine = HybridSearchEngine()
 
-        # 📚 Initialize Neo4j client (connects to graph database)
-        logger.info("Connecting to Neo4j...")
-        neo4j_client = Neo4jClient()
+        # Reuse the loaded model rather than a second 440MB copy.
+        embedding_generator = search_engine.generator
 
-        # 📚 Initialize embedding generator (loads sentence-transformer model)
-        logger.info("Loading embedding model...")
-        embedding_generator = EmbeddingGenerator()
-
-        logger.info("✅ All services initialized successfully!")
+        logger.info("Search services initialized successfully!")
 
     except Exception as e:
-        logger.error(f"❌ Failed to initialize services: {e}")
+        logger.error(f"Failed to initialize search services: {e}")
         raise
 
+    # Neo4j is optional; graph endpoints return 503 when it is unreachable
+    # but search endpoints still work fine.
+    try:
+        logger.info("Connecting to Neo4j...")
+        neo4j_client = Neo4jClient()
+        if neo4j_client.available:
+            logger.info("Neo4j connected")
+            search_engine.graph.neo4j = neo4j_client
+        else:
+            logger.warning("Neo4j unavailable — graph endpoints will return 503")
+    except Exception as e:
+        logger.warning(f"Neo4j init failed (graph endpoints disabled): {e}")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """
-    📚 LEARNING: Shutdown Hook
+    try:
+        logger.info("Initializing RAG pipeline...")
+        rag_pipeline = RAGPipeline(search_engine)
+        if rag_pipeline.llm_available:
+            logger.info(f"RAG ready (model: {rag_pipeline.llm.model})")
+        else:
+            logger.warning("RAG running without an LLM — /chat returns sources only")
+    except Exception as e:
+        logger.warning(f"RAG init failed: {e}")
+        rag_pipeline = None
 
-    Runs when server stops (Ctrl+C or crashes)
-    Clean up resources (close database connections)
-    """
+    yield
+
+    # ---- shutdown ----
     logger.info("Shutting down TrendScout AI API...")
 
     if search_engine:
@@ -142,25 +82,48 @@ async def shutdown_event():
         neo4j_client.close()
 
 
-# =============================================================================
-# 📚 LEARNING SECTION 4: PYDANTIC MODELS (Request/Response Schemas)
-# =============================================================================
+# Create the FastAPI application instance
+app = FastAPI(
+    lifespan=lifespan,
+    title="TrendScout AI API",
+    description="API for AI startup discovery using hybrid search and knowledge graphs",
+    version="1.0.0"
+)
 
-# 📚 LEARNING: What is Pydantic?
+# - Your Streamlit UI (running on port 8501) wants to call this API (port 8000)
+# - Browsers block this by default for security
+# - CORS middleware tells browser "it's okay, allow it"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # In production, specify exact origins like ["http://localhost:8501"]
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow GET, POST, etc.
+    allow_headers=["*"],  # Allow all headers
+)
+
+
+# --- Globals, populated at startup ---
+
+# We initialize them inside the lifespan handler, which runs once at boot.
+search_engine = None
+neo4j_client = None
+embedding_generator = None
+rag_pipeline = None
+
+# --- Request/response models ---
+
 # Pydantic validates data automatically!
 #
-# Without Pydantic:
 #   - User sends: {"top_k": "five"}  (string instead of int)
 #   - Your code crashes when trying to use it as int
 #
-# With Pydantic:
 #   - FastAPI sees type: int
 #   - Automatically rejects "five" and returns error
 #   - Only valid data reaches your code
 
 class SearchRequest(BaseModel):
     """
-    📚 Request model for /search endpoint
+    Request model for /search endpoint
 
     This defines what data the endpoint expects:
     - query: required string
@@ -172,70 +135,116 @@ class SearchRequest(BaseModel):
     collection: Optional[str] = None
     filters: Optional[Dict] = None
     top_k: int = 10
-    use_keyword: bool = True
-    use_semantic: bool = True
+    use_keyword: bool = True      # BM25 lexical channel
+    use_semantic: bool = True     # E5 + FAISS dense channel
+    use_graph: bool = True        # shared-entity graph expansion
 
-    class Config:
-        # 📚 Example shown in API docs
-        schema_extra = {
-            "example": {
-                "query": "AI music generation startup",
-                "collection": "startups",
-                "top_k": 5
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "query": "AI music generation startup",
+            "collection": "startups",
+            "top_k": 5
         }
+    })
 
 
 class SearchResult(BaseModel):
     """
-    📚 Response model for search results
+    Response model for search results
 
-    This defines what data the endpoint returns
+    `ranks` gives this document's position in each channel that found it.
     """
     doc_id: str
     collection: str
     rrf_score: Optional[float] = None
     ranks: Optional[Dict] = None
+    channel_scores: Optional[Dict] = None
+    shared_entities: Optional[List[str]] = None
+    title: Optional[str] = None
+    url: Optional[str] = None
     document: Dict
 
 
+class ChatRequest(BaseModel):
+    """Request for the RAG /chat endpoint"""
+    question: str
+    top_k: int = 8
+    history: Optional[List[Dict[str, str]]] = None
+    use_planner: bool = True
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "question": "Which AI startups in San Francisco raised a Series B?",
+            "top_k": 8
+        }
+    })
+
+
+class ChatSource(BaseModel):
+    """One cited source backing an answer"""
+    n: int
+    doc_id: str
+    collection: str
+    title: str
+    url: str = ""
+    snippet: str = ""
+    rrf_score: float = 0.0
+    ranks: Dict = Field(default_factory=dict)
+    shared_entities: List[str] = Field(default_factory=list)
+
+
+class ChatResponse(BaseModel):
+    """A grounded answer plus the sources it cites"""
+    question: str
+    answer: str
+    sources: List[ChatSource]
+    search_query: str
+    plan: Dict
+    used_llm_planner: bool
+
+
 class SimilarDocRequest(BaseModel):
-    """📚 Request for finding similar documents"""
+    """Request for finding similar documents"""
     doc_id: str
     collection: str
     top_k: int = 5
 
-    class Config:
-        schema_extra = {
-            "example": {
-                "doc_id": "507f1f77bcf86cd799439011",
-                "collection": "startups",
-                "top_k": 5
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "doc_id": "507f1f77bcf86cd799439011",
+            "collection": "startups",
+            "top_k": 5
         }
+    })
+
+
+def require_neo4j():
+    """Raise 503 if Neo4j is not available."""
+    if neo4j_client is None or not neo4j_client.available:
+        raise HTTPException(
+            status_code=503,
+            detail="Neo4j is currently unavailable."
+        )
 
 
 class CypherQueryRequest(BaseModel):
-    """📚 Request for executing Neo4j Cypher queries"""
+    """Request for executing Neo4j Cypher queries"""
     query: str
     parameters: Optional[Dict] = None
 
-    class Config:
-        schema_extra = {
-            "example": {
-                "query": "MATCH (s:Startup)-[:MENTIONS]->(e:Entity {entity_type: 'ORG'}) RETURN s.name, e.entity_text LIMIT 5"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "query": "MATCH (s:Startup)-[:MENTIONS]->(e:Entity {entity_type: 'ORG'}) RETURN s.name, e.entity_text LIMIT 5"
         }
+    })
 
 
-# =============================================================================
-# 📚 LEARNING SECTION 5: ENDPOINTS (The actual API!)
-# =============================================================================
+# --- Endpoints ---
 
 @app.get("/")
 async def root():
     """
-    📚 Health check endpoint
+    Health check endpoint
 
     Returns basic info about the API
     Try: http://localhost:8000/
@@ -244,6 +253,7 @@ async def root():
         "message": "TrendScout AI API is running!",
         "version": "1.0.0",
         "endpoints": {
+            "chat": "/chat",
             "search": "/search",
             "similar": "/similar",
             "graph_query": "/graph/query",
@@ -254,14 +264,12 @@ async def root():
     }
 
 
-# =============================================================================
-# SEARCH ENDPOINTS
-# =============================================================================
+# --- Search ---
 
 @app.post("/search", response_model=List[SearchResult])
 async def hybrid_search(request: SearchRequest):
     """
-    📚 MAIN ENDPOINT: Hybrid Search
+    MAIN ENDPOINT: Hybrid Search
 
     This wraps your HybridSearchEngine.search() method!
 
@@ -277,15 +285,14 @@ async def hybrid_search(request: SearchRequest):
     try:
         logger.info(f"Search request: query='{request.query}', collection={request.collection}")
 
-        # 📚 LEARNING: Call your existing code!
-        # We're just wrapping it, not rewriting it
         results = search_engine.search(
             query=request.query,
             collection=request.collection,
             filters=request.filters,
             top_k=request.top_k,
             use_keyword=request.use_keyword,
-            use_semantic=request.use_semantic
+            use_semantic=request.use_semantic,
+            use_graph=request.use_graph
         )
 
         logger.info(f"Found {len(results)} results")
@@ -293,16 +300,47 @@ async def hybrid_search(request: SearchRequest):
         return results
 
     except Exception as e:
-        # 📚 LEARNING: Error handling
         # HTTPException returns proper HTTP error codes
         logger.error(f"Search error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Ask a question, get an answer cited against the retrieved documents.
+
+    Pass `history` as [{"role": "user"|"assistant", "content": "..."}] for
+    follow-up questions.
+    """
+    if rag_pipeline is None:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG pipeline failed to initialize. Check the server logs."
+        )
+
+    if not request.question or not request.question.strip():
+        raise HTTPException(status_code=400, detail="question must not be empty")
+
+    try:
+        logger.info(f"Chat request: {request.question!r}")
+        result = rag_pipeline.answer(
+            question=request.question,
+            top_k=request.top_k,
+            history=request.history,
+            use_planner=request.use_planner,
+        )
+        return result.to_dict()
+
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/similar", response_model=List[SearchResult])
 async def find_similar_documents(request: SimilarDocRequest):
     """
-    📚 Find documents similar to a given document
+    Find documents similar to a given document
 
     Uses vector embeddings to find semantically similar content
     Perfect for "More like this" features
@@ -317,7 +355,7 @@ async def find_similar_documents(request: SimilarDocRequest):
         )
 
         if not doc:
-            # 📚 404 error for "not found"
+            # 404 error for "not found"
             raise HTTPException(status_code=404, detail="Document not found")
 
         # Get document text
@@ -347,14 +385,12 @@ async def find_similar_documents(request: SimilarDocRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# =============================================================================
-# KNOWLEDGE GRAPH ENDPOINTS
-# =============================================================================
+# --- Knowledge graph ---
 
 @app.post("/graph/query")
 async def execute_cypher_query(request: CypherQueryRequest):
     """
-    📚 Execute custom Neo4j Cypher queries
+    Execute custom Neo4j Cypher queries
 
     This exposes direct access to your knowledge graph!
 
@@ -371,10 +407,11 @@ async def execute_cypher_query(request: CypherQueryRequest):
     }
     """
 
+    require_neo4j()
     try:
         logger.info(f"Executing Cypher query: {request.query[:100]}...")
 
-        # 📚 Run query through your Neo4jClient
+        # Run query through your Neo4jClient
         results = neo4j_client.run_query(request.query, request.parameters)
 
         # Convert Neo4j records to dictionaries
@@ -398,10 +435,10 @@ async def execute_cypher_query(request: CypherQueryRequest):
 @app.get("/graph/entities")
 async def get_top_entities(
     entity_type: Optional[str] = None,
-    limit: int = Query(default=10, le=100)  # 📚 Max 100 results
+    limit: int = Query(default=10, le=100) # Max 100 results
 ):
     """
-    📚 Get most mentioned entities from knowledge graph
+    Get most mentioned entities from knowledge graph
 
     Parameters:
     - entity_type: Filter by type (ORG, PERSON, PRODUCT, etc.)
@@ -410,6 +447,7 @@ async def get_top_entities(
     Try: http://localhost:8000/graph/entities?entity_type=ORG&limit=5
     """
 
+    require_neo4j()
     try:
         # Build Cypher query
         if entity_type:
@@ -445,11 +483,12 @@ async def get_top_entities(
 @app.get("/graph/startup/{startup_name}")
 async def get_startup_entities(startup_name: str):
     """
-    📚 Get all entities mentioned by a specific startup
+    Get all entities mentioned by a specific startup
 
     Try: http://localhost:8000/graph/startup/Suno
     """
 
+    require_neo4j()
     try:
         query = """
         MATCH (s:Startup {name: $startup_name})-[:MENTIONS]->(e:Entity)
@@ -479,14 +518,12 @@ async def get_startup_entities(startup_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# =============================================================================
-# STATISTICS ENDPOINT
-# =============================================================================
+# --- Statistics ---
 
 @app.get("/stats")
 async def get_statistics():
     """
-    📚 Get overall system statistics
+    Get overall system statistics
 
     Shows what data you have in MongoDB, Neo4j, and FAISS
     """
@@ -497,15 +534,26 @@ async def get_statistics():
         article_count = search_engine.mongo.db.articles.count_documents({})
         repo_count = search_engine.mongo.db.github_repos.count_documents({})
 
-        # Neo4j counts
-        node_count = neo4j_client.get_node_count()
-        rel_result = neo4j_client.run_query("MATCH ()-[r]->() RETURN count(r) as count")
-        relationship_count = rel_result[0]['count'] if rel_result else 0
-        entity_result = neo4j_client.run_query("MATCH (e:Entity) RETURN count(e) as count")
-        entity_count = entity_result[0]['count'] if entity_result else 0
-
         # FAISS index size
         faiss_count = search_engine.faiss_index.ntotal
+
+        # Neo4j counts, absent when it is unreachable
+        neo4j_stats = {"status": "unavailable", "total_nodes": 0, "entities": 0, "relationships": 0}
+        if neo4j_client and neo4j_client.available:
+            try:
+                node_count = neo4j_client.get_node_count()
+                rel_result = neo4j_client.run_query("MATCH ()-[r]->() RETURN count(r) as count")
+                relationship_count = rel_result[0]['count'] if rel_result else 0
+                entity_result = neo4j_client.run_query("MATCH (e:Entity) RETURN count(e) as count")
+                entity_count = entity_result[0]['count'] if entity_result else 0
+                neo4j_stats = {
+                    "status": "connected",
+                    "total_nodes": node_count,
+                    "entities": entity_count,
+                    "relationships": relationship_count,
+                }
+            except Exception as neo4j_err:
+                logger.warning(f"Neo4j stats failed: {neo4j_err}")
 
         return {
             "mongodb": {
@@ -514,11 +562,7 @@ async def get_statistics():
                 "repos": repo_count,
                 "total_documents": startup_count + article_count + repo_count
             },
-            "neo4j": {
-                "total_nodes": node_count,
-                "entities": entity_count,
-                "relationships": relationship_count
-            },
+            "neo4j": neo4j_stats,
             "embeddings": {
                 "vectors": faiss_count,
                 "dimension": search_engine.faiss_index.d
@@ -530,32 +574,29 @@ async def get_statistics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# =============================================================================
-# 📚 LEARNING SECTION 6: RUN THE SERVER
-# =============================================================================
+# --- Entry point ---
 
 if __name__ == "__main__":
     import uvicorn
 
     print("=" * 70)
-    print("🚀 STARTING TRENDSCOUT AI API")
+    print("STARTING TRENDSCOUT AI API")
     print("=" * 70)
-    print("\n📍 API will be available at:")
+    print("\n API will be available at:")
     print("  - Main API: http://localhost:8000")
     print("  - Interactive docs: http://localhost:8000/docs")
     print("  - Alternative docs: http://localhost:8000/redoc")
-    print("\n📚 Learning Guide:")
+    print("\n Learning Guide:")
     print("  1. Open the docs URL in your browser")
     print("  2. Click on each endpoint to see what it does")
     print("  3. Click 'Try it out' to test with real data")
-    print("  4. Check this file's comments (marked with 📚)")
-    print("\n💡 Press CTRL+C to stop the server")
+    print("4. Check this file's comments (marked with )")
+    print("\n Press CTRL+C to stop the server")
     print("=" * 70)
 
-    # 📚 LEARNING: uvicorn is the ASGI server that runs FastAPI
     uvicorn.run(
-        "main:app",           # 📚 "main" = this filename, "app" = FastAPI instance
-        host="0.0.0.0",       # 📚 Accessible from anywhere (localhost, other computers)
-        port=8000,            # 📚 Port number
-        reload=True           # 📚 Auto-restart when code changes (dev only!)
+        "main:app", # "main"= this filename, "app"= FastAPI instance
+        host="0.0.0.0", # Accessible from anywhere (localhost, other computers)
+        port=8000, # Port number
+        reload=True # Auto-restart when code changes (dev only!)
     )

@@ -1,106 +1,112 @@
 """
-Hybrid Search Engine
+Hybrid search: BM25 + E5/FAISS + graph expansion, fused with Reciprocal
+Rank Fusion.
 
-Combines keyword search (MongoDB) + semantic search (FAISS) for best results.
-
-What it does:
-- Keyword search: Find exact matches, filter by fields (location, funding, etc.)
-- Semantic search: Find similar content by meaning
-- Combine results: Use Reciprocal Rank Fusion (RRF) to merge rankings
-
-Why hybrid is better:
-- Keyword alone: Misses similar meanings
-- Semantic alone: Can miss exact matches
-- Hybrid: Gets best of both worlds!
-
-Example:
-    Query: "AI music startup in Cambridge"
-
-    Keyword finds: Startups in Cambridge
-    Semantic finds: AI music related startups
-    Combined result: AI music startups in Cambridge (best match!)
+RRF fuses by rank rather than score because BM25 scores are unbounded,
+cosine similarities live in [-1, 1] and graph scores are log weights.
+k=60 follows Cormack et al. (2009).
 """
 
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from src.database.mongo_client import MongoDBClient
-from src.embeddings.embedding_generator import EmbeddingGenerator
+import pickle
+import logging
+from typing import List, Dict, Optional
+
 import faiss
 import numpy as np
-import pickle
-from typing import List, Dict, Optional
-import logging
 from bson import ObjectId
+
+from src.database.mongo_client import MongoDBClient
+from src.embeddings.embedding_generator import EmbeddingGenerator
+from src.search.bm25_index import BM25Index
+from src.search.graph_expansion import GraphExpander
+from src.search.document_text import document_title, document_url
 
 logger = logging.getLogger(__name__)
 
+# Tuned with scripts/evaluate_retrieval.py --sweep. Weighting BM25 equally
+# with dense scores 0.863 nDCG@10 against 0.881 at 0.5, because lexical
+# noise drags semantic queries down; dropping BM25 entirely costs the
+# lexical queries it exists for. Anything in 0.25-0.75 is within noise.
+DEFAULT_WEIGHTS = {
+    'keyword': 0.5,
+    'semantic': 1.0,
+    'graph': 0.5,
+}
+
+RRF_K = 60
+
 
 class HybridSearchEngine:
-    """
-    Hybrid search engine combining keyword + semantic search
 
-    Features:
-    - Keyword search via MongoDB
-    - Semantic search via FAISS
-    - Reciprocal Rank Fusion (RRF) for combining results
-    - Support for filters (location, collection, etc.)
-    """
-
-    def __init__(self):
-        """
-        Initialize hybrid search engine
-
-        Loads:
-        1. MongoDB client (for keyword search)
-        2. Embedding generator (for query encoding)
-        3. FAISS index (for semantic search)
-        4. Metadata (for result lookup)
-        """
+    def __init__(self, neo4j_client=None, weights: Dict[str, float] = None):
         logger.info("Initializing Hybrid Search Engine...")
 
-        # MongoDB client
         self.mongo = MongoDBClient()
-
-        # Embedding generator
         self.generator = EmbeddingGenerator()
+        self.weights = dict(DEFAULT_WEIGHTS)
+        if weights:
+            self.weights.update(weights)
 
-        # Load FAISS index
-        data_dir = os.path.join(os.path.dirname(__file__), '../../data')
+        data_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '../../data')
+        )
         index_path = os.path.join(data_dir, 'faiss_index.bin')
         metadata_path = os.path.join(data_dir, 'faiss_metadata.pkl')
 
         if not os.path.exists(index_path):
             raise FileNotFoundError(
                 f"FAISS index not found at {index_path}. "
-                "Run scripts/generate_embeddings.py first!"
+                "Run: python scripts/build_indexes.py"
             )
 
         self.faiss_index = faiss.read_index(index_path)
-
         with open(metadata_path, 'rb') as f:
             self.faiss_metadata = pickle.load(f)
 
-        logger.info(f"✅ Loaded FAISS index with {self.faiss_index.ntotal} vectors")
+        if self.faiss_index.d != self.generator.dimension:
+            raise ValueError(
+                f"Index/model dimension mismatch: FAISS index is "
+                f"{self.faiss_index.d}-dim but the embedding model produces "
+                f"{self.generator.dimension}-dim vectors. Rebuild the index."
+            )
 
-    def _clean_document(self, doc: Dict) -> Dict:
-        """
-        Convert MongoDB document to JSON-serializable format
-        
-        Converts ObjectId to string and handles other MongoDB types
-        """
+        self.bm25 = BM25Index.load()
+        self.graph = GraphExpander(self.mongo, neo4j_client=neo4j_client)
+
+        logger.info(
+            f"Ready - {self.faiss_index.ntotal} dense vectors, "
+            f"{len(self.bm25)} BM25 documents"
+        )
+
+    def _clean_document(self, doc: Optional[Dict]) -> Optional[Dict]:
         if doc is None:
             return None
-        
-        # Create a copy to avoid modifying original
-        cleaned = doc.copy()
-        
-        # Convert _id from ObjectId to string
+        cleaned = dict(doc)
         if '_id' in cleaned:
             cleaned['_id'] = str(cleaned['_id'])
-        
+        cleaned.pop('embedding', None)
         return cleaned
+
+    def _fetch_documents(self, refs: List[tuple]) -> Dict[str, Dict]:
+        """One query per collection rather than one per document."""
+        by_collection: Dict[str, List[ObjectId]] = {}
+        for doc_id, collection in refs:
+            if not collection:
+                continue
+            try:
+                by_collection.setdefault(collection, []).append(ObjectId(doc_id))
+            except Exception:
+                continue
+
+        fetched: Dict[str, Dict] = {}
+        for collection, ids in by_collection.items():
+            for doc in self.mongo.db[collection].find({'_id': {'$in': ids}}):
+                fetched[str(doc['_id'])] = self._clean_document(doc)
+        return fetched
 
     def keyword_search(
         self,
@@ -110,124 +116,73 @@ class HybridSearchEngine:
         top_k: int = 20
     ) -> List[Dict]:
         """
-        Perform keyword search using MongoDB
-
-        Args:
-            query: Search query text
-            collection: Which collection to search ('startups', 'articles', 'github_repos')
-                       If None, searches all collections
-            filters: Additional MongoDB filters
-                    Example: {'location': 'Cambridge', 'funding_amount': {'$exists': True}}
-            top_k: Number of results to return
-
-        Returns:
-            List of documents with scores
-
-        How it works:
-            1. Build MongoDB query with text search + filters
-            2. Execute search
-            3. Return ranked results
+        BM25 over the corpus. Field filters resolve in MongoDB but are handed
+        to BM25 so they apply before truncation rather than after.
         """
+        allowed = None
+        if filters:
+            allowed = self._ids_matching_filters(filters, collection)
+            if not allowed:
+                return []
 
-        results = []
+        return self.bm25.search(
+            query,
+            collection=collection,
+            top_k=top_k,
+            allowed_ids=allowed,
+        )
 
-        # Determine which collections to search
-        collections_to_search = [collection] if collection else ['startups', 'articles', 'github_repos']
-
-        for coll_name in collections_to_search:
-            # Build MongoDB query
-            mongo_query = {}
-
-            # Add text search if query provided
-            if query and query.strip():
-                mongo_query['$text'] = {'$search': query}
-
-            # Add additional filters
-            if filters:
-                mongo_query.update(filters)
-
-            # Execute search
-            cursor = self.mongo.db[coll_name].find(
-                mongo_query,
-                {'score': {'$meta': 'textScore'}} if query and query.strip() else {}
-            )
-
-            # Sort by text score if we have a query
-            if query and query.strip():
-                cursor = cursor.sort([('score', {'$meta': 'textScore'})]).limit(top_k)
-            else:
-                cursor = cursor.limit(top_k)
-
-            # Collect results
-            for doc in cursor:
-                results.append({
-                    'doc_id': str(doc['_id']),
-                    'collection': coll_name,
-                    'score': doc.get('score', 0),
-                    'document': self._clean_document(doc)
-                })
-
-        # Sort by score (highest first)
-        results.sort(key=lambda x: x['score'], reverse=True)
-
-        return results[:top_k]
+    def _ids_matching_filters(self, filters: Dict, collection: str = None) -> set:
+        collections = [collection] if collection else list(BM25Index.COLLECTIONS)
+        allowed = set()
+        for coll in collections:
+            for doc in self.mongo.db[coll].find(filters, {'_id': 1}):
+                allowed.add(str(doc['_id']))
+        return allowed
 
     def semantic_search(
         self,
         query: str,
         collection: str = None,
-        top_k: int = 20
+        top_k: int = 20,
+        filters: Dict = None
     ) -> List[Dict]:
         """
-        Perform semantic search using FAISS
-
-        Args:
-            query: Search query text
-            collection: Filter by collection (optional)
-            top_k: Number of results to return
-
-        Returns:
-            List of documents with similarity scores
-
-        How it works:
-            1. Convert query to embedding vector
-            2. Search FAISS index for similar vectors
-            3. Return ranked results
+        Dense retrieval through FAISS. FAISS cannot filter on fields, so a
+        filtered query scans the whole index and drops non-matching hits.
         """
+        query_embedding = self.generator.embed_query(query).reshape(1, -1).astype('float32')
 
-        # Step 1: Convert query to embedding
-        query_embedding = self.generator.generate_embedding(query)
-        query_embedding = query_embedding.reshape(1, -1)  # Shape: (1, 384)
+        allowed_ids = None
+        if filters:
+            allowed_ids = self._ids_matching_filters(filters, collection)
+            if not allowed_ids:
+                return []
 
-        # Step 2: Search FAISS index
-        # Search for more candidates if filtering by collection
-        search_k = top_k * 3 if collection else top_k
+        if collection or filters:
+            search_k = self.faiss_index.ntotal
+        else:
+            search_k = min(top_k, self.faiss_index.ntotal)
         similarities, indices = self.faiss_index.search(query_embedding, search_k)
 
-        # Step 3: Build results
         results = []
-
         for idx, score in zip(indices[0], similarities[0]):
+            if idx < 0:
+                continue
             doc_id = self.faiss_metadata['ids'][idx]
             meta = self.faiss_metadata['metadata'][idx]
-            doc_collection = meta['collection']
+            doc_collection = meta.get('collection', '')
 
-            # Filter by collection if specified
             if collection and doc_collection != collection:
                 continue
+            if allowed_ids is not None and doc_id not in allowed_ids:
+                continue
 
-            # Get full document from MongoDB
-            doc = self.mongo.db[doc_collection].find_one({'_id': ObjectId(doc_id)})
-
-            if doc:
-                results.append({
-                    'doc_id': str(doc['_id']),
-                    'collection': doc_collection,
-                    'score': float(score),
-                    'document': self._clean_document(doc)
-                })
-
-            # Stop if we have enough results
+            results.append({
+                'doc_id': doc_id,
+                'collection': doc_collection,
+                'score': float(score),
+            })
             if len(results) >= top_k:
                 break
 
@@ -235,84 +190,35 @@ class HybridSearchEngine:
 
     def reciprocal_rank_fusion(
         self,
-        keyword_results: List[Dict],
-        semantic_results: List[Dict],
-        k: int = 60
+        channels: Dict[str, List[Dict]],
+        k: int = RRF_K
     ) -> List[Dict]:
-        """
-        Combine keyword and semantic results using Reciprocal Rank Fusion (RRF)
+        """Merge ranked lists, keeping per-channel ranks for explainability."""
+        combined: Dict[str, Dict] = {}
 
-        RRF Formula:
-            score = 1 / (k + rank)
+        for channel_name, results in channels.items():
+            weight = self.weights.get(channel_name, 1.0)
+            for rank, result in enumerate(results, start=1):
+                doc_id = result['doc_id']
+                entry = combined.setdefault(doc_id, {
+                    'doc_id': doc_id,
+                    'collection': result.get('collection', ''),
+                    'rrf_score': 0.0,
+                    'ranks': {},
+                    'channel_scores': {},
+                    'shared_entities': [],
+                })
+                entry['rrf_score'] += weight / (k + rank)
+                entry['ranks'][channel_name] = rank
+                entry['channel_scores'][channel_name] = result.get('score', 0.0)
+                if result.get('shared_entities'):
+                    entry['shared_entities'] = result['shared_entities']
+                if not entry['collection']:
+                    entry['collection'] = result.get('collection', '')
 
-        Why RRF:
-        - Simple and effective
-        - Doesn't require score normalization
-        - Documents appearing in both lists get higher scores
-        - Used by search engines like Elasticsearch
-
-        Args:
-            keyword_results: Results from keyword search
-            semantic_results: Results from semantic search
-            k: RRF constant (typically 60)
-
-        Returns:
-            Combined results sorted by RRF score
-        """
-
-        # Dictionary to accumulate scores
-        # Key: doc_id, Value: {'score': rrf_score, 'doc': document, 'ranks': {...}}
-        combined_scores = {}
-
-        # Process keyword results
-        for rank, result in enumerate(keyword_results, 1):
-            doc_id = result['doc_id']
-
-            if doc_id not in combined_scores:
-                combined_scores[doc_id] = {
-                    'score': 0,
-                    'document': result['document'],
-                    'collection': result['collection'],
-                    'ranks': {}
-                }
-
-            # RRF score for this result
-            rrf_score = 1 / (k + rank)
-            combined_scores[doc_id]['score'] += rrf_score
-            combined_scores[doc_id]['ranks']['keyword'] = rank
-
-        # Process semantic results
-        for rank, result in enumerate(semantic_results, 1):
-            doc_id = result['doc_id']
-
-            if doc_id not in combined_scores:
-                combined_scores[doc_id] = {
-                    'score': 0,
-                    'document': result['document'],
-                    'collection': result['collection'],
-                    'ranks': {}
-                }
-
-            # RRF score for this result
-            rrf_score = 1 / (k + rank)
-            combined_scores[doc_id]['score'] += rrf_score
-            combined_scores[doc_id]['ranks']['semantic'] = rank
-
-        # Convert to list and sort by score
-        final_results = []
-        for doc_id, data in combined_scores.items():
-            final_results.append({
-                'doc_id': doc_id,
-                'collection': data['collection'],
-                'rrf_score': data['score'],
-                'ranks': data['ranks'],
-                'document': data['document']
-            })
-
-        # Sort by RRF score (highest first)
-        final_results.sort(key=lambda x: x['rrf_score'], reverse=True)
-
-        return final_results
+        fused = list(combined.values())
+        fused.sort(key=lambda r: r['rrf_score'], reverse=True)
+        return fused
 
     def search(
         self,
@@ -321,165 +227,131 @@ class HybridSearchEngine:
         filters: Dict = None,
         top_k: int = 10,
         use_keyword: bool = True,
-        use_semantic: bool = True
+        use_semantic: bool = True,
+        use_graph: bool = True,
+        candidates_per_channel: int = 20,
+        graph_expansion_only: bool = True,
     ) -> List[Dict]:
         """
-        Main hybrid search function
+        Run the enabled channels and fuse them.
 
-        Args:
-            query: Search query
-            collection: Filter by collection ('startups', 'articles', 'github_repos')
-            filters: Additional MongoDB filters
-            top_k: Number of results to return
-            use_keyword: Enable keyword search
-            use_semantic: Enable semantic search
-
-        Returns:
-            List of ranked results
-
-        Example:
-            engine.search(
-                query="AI music generation",
-                collection="startups",
-                filters={'location': {'$regex': 'Cambridge'}},
-                top_k=5
-            )
+        graph_expansion_only restricts the graph channel to documents the
+        text channels missed. Letting it also re-score documents they already
+        found costs 9.9% nDCG: a document ranked weakly by both text channels
+        picks up a third contribution and overtakes one ranked strongly by a
+        single channel.
         """
+        if not query or not query.strip():
+            return []
 
-        logger.info(f"Searching for: '{query}'")
+        logger.info(f"Searching: '{query}' (collection={collection})")
+        channels: Dict[str, List[Dict]] = {}
 
-        # Perform keyword search
-        keyword_results = []
         if use_keyword:
-            keyword_results = self.keyword_search(query, collection, filters, top_k=20)
-            logger.info(f"Keyword search found {len(keyword_results)} results")
+            channels['keyword'] = self.keyword_search(
+                query, collection, filters, top_k=candidates_per_channel)
 
-        # Perform semantic search
-        semantic_results = []
         if use_semantic:
-            semantic_results = self.semantic_search(query, collection, top_k=20)
-            logger.info(f"Semantic search found {len(semantic_results)} results")
+            channels['semantic'] = self.semantic_search(
+                query, collection, top_k=candidates_per_channel, filters=filters)
 
-        # Combine results using RRF
-        if use_keyword and use_semantic:
-            combined_results = self.reciprocal_rank_fusion(keyword_results, semantic_results)
-            logger.info(f"Combined results: {len(combined_results)}")
-        elif use_keyword:
-            combined_results = keyword_results
-        elif use_semantic:
-            combined_results = semantic_results
-        else:
-            combined_results = []
+        if use_graph:
+            seeds: List[str] = []
+            for name in ('keyword', 'semantic'):
+                seeds.extend(r['doc_id'] for r in channels.get(name, [])[:5])
+            seeds = list(dict.fromkeys(seeds))
 
-        return combined_results[:top_k]
+            graph_hits = self.graph.expand(
+                seeds, collection=collection, top_k=candidates_per_channel)
+
+            if filters and graph_hits:
+                allowed = self._ids_matching_filters(filters, collection)
+                graph_hits = [g for g in graph_hits if g['doc_id'] in allowed]
+
+            if graph_expansion_only:
+                already_found = {
+                    r['doc_id']
+                    for name in ('keyword', 'semantic')
+                    for r in channels.get(name, [])
+                }
+                graph_hits = [g for g in graph_hits
+                              if g['doc_id'] not in already_found]
+
+            channels['graph'] = graph_hits
+
+        if not channels:
+            return []
+
+        fused = self.reciprocal_rank_fusion(channels)[:top_k]
+
+        documents = self._fetch_documents(
+            [(r['doc_id'], r['collection']) for r in fused])
+
+        enriched = []
+        for result in fused:
+            doc = documents.get(result['doc_id'])
+            if doc is None:
+                continue
+            result['document'] = doc
+            result['title'] = document_title(doc, result['collection'])
+            result['url'] = document_url(doc, result['collection'])
+            enriched.append(result)
+
+        return enriched
 
     def format_result(self, result: Dict) -> str:
-        """
-        Format search result for display
+        doc = result.get('document', {})
+        collection = result.get('collection', '')
 
-        Args:
-            result: Search result dictionary
+        lines = [
+            f"Collection: {collection.upper()}",
+            f"RRF Score:  {result.get('rrf_score', 0):.5f}",
+            f"Title:      {result.get('title', 'N/A')}",
+        ]
 
-        Returns:
-            Formatted string for printing
-        """
+        ranks = result.get('ranks', {})
+        if ranks:
+            lines.append("Ranks:      " + ", ".join(
+                f"{name}={rank}" for name, rank in sorted(ranks.items())))
 
-        doc = result['document']
-        collection = result['collection']
-
-        output = []
-        output.append(f"Collection: {collection.upper()}")
-        output.append(f"RRF Score: {result.get('rrf_score', 0):.4f}")
-
-        if 'ranks' in result:
-            ranks = result['ranks']
-            if 'keyword' in ranks:
-                output.append(f"Keyword Rank: {ranks['keyword']}")
-            if 'semantic' in ranks:
-                output.append(f"Semantic Rank: {ranks['semantic']}")
+        if result.get('shared_entities'):
+            lines.append("Via graph:  " + ", ".join(result['shared_entities'][:5]))
 
         if collection == 'startups':
-            output.append(f"Name: {doc.get('name', 'N/A')}")
-            output.append(f"Location: {doc.get('location', 'N/A')}")
-            output.append(f"Description: {doc.get('description', 'N/A')[:100]}...")
-
-        elif collection == 'articles':
-            output.append(f"Title: {doc.get('title', 'N/A')[:80]}")
-            output.append(f"URL: {doc.get('url', 'N/A')}")
-
+            lines.append(f"Location:   {doc.get('location', 'N/A')}")
+            lines.append(f"Funding:    {doc.get('funding', 'N/A')}")
         elif collection == 'github_repos':
-            output.append(f"Repo: {doc.get('full_name', 'N/A')}")
-            output.append(f"Stars: {doc.get('stars', 0)}")
-            output.append(f"Description: {doc.get('description', 'N/A')[:100]}...")
+            lines.append(f"Stars:      {doc.get('stars', 'N/A')}")
 
-        return '\n'.join(output)
+        description = str(doc.get('description', ''))[:140]
+        if description:
+            lines.append(f"About:      {description}...")
+
+        return '\n'.join(lines)
 
     def close(self):
-        """Close MongoDB connection"""
         self.mongo.close()
 
 
-# =============================================================================
-# EXAMPLE USAGE
-# =============================================================================
-
 if __name__ == "__main__":
-    """
-    Test hybrid search with example queries
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-    Run: python src/search/hybrid_search.py
-    """
-
-    logging.basicConfig(level=logging.INFO)
-
-    print("=" * 70)
-    print("HYBRID SEARCH ENGINE - DEMO")
-    print("=" * 70)
-
-    # Create search engine
-    print("\n[1] Initializing search engine...")
     engine = HybridSearchEngine()
-    print("SUCCESS Search engine ready\n")
 
-    # Test queries
-    test_queries = [
-        {
-            'query': 'AI music generation startup',
-            'collection': 'startups',
-            'top_k': 3
-        },
-        {
-            'query': 'machine learning artificial intelligence',
-            'collection': None,
-            'top_k': 5
-        },
-        {
-            'query': 'Cambridge',
-            'collection': 'startups',
-            'filters': {'location': {'$regex': 'Cambridge', '$options': 'i'}},
-            'top_k': 3
-        }
+    demos = [
+        {'query': 'AI music generation startup', 'top_k': 3},
+        {'query': 'open source framework for building LLM agents',
+         'collection': 'github_repos', 'top_k': 3},
+        {'query': 'startups that raised a Series A',
+         'collection': 'startups', 'top_k': 3},
     ]
 
-    for i, test in enumerate(test_queries, 1):
-        print("=" * 70)
-        print(f"QUERY {i}: '{test['query']}'")
-        if test.get('filters'):
-            print(f"Filters: {test['filters']}")
-        print("=" * 70)
-
-        results = engine.search(**test)
-
-        print(f"\nTop {len(results)} results:\n")
-
-        for j, result in enumerate(results, 1):
-            print(f"{j}. " + "─" * 66)
+    for i, demo in enumerate(demos, 1):
+        print("\n" + "=" * 72)
+        print(f"QUERY {i}: {demo['query']!r}")
+        print("=" * 72)
+        for j, result in enumerate(engine.search(**demo), 1):
+            print(f"\n{j}. " + "-" * 66)
             print(engine.format_result(result))
-            print()
 
-    # Cleanup
     engine.close()
-
-    print("=" * 70)
-    print("✅ HYBRID SEARCH DEMO COMPLETE")
-    print("=" * 70)

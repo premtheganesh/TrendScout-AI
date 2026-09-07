@@ -1,6 +1,4 @@
-"""
-Pydantic schema for GitHub repositories
-"""
+"""Pydantic schema for GitHub repositories"""
 
 from pydantic import BaseModel, validator
 from typing import Optional, List

@@ -1,8 +1,4 @@
-"""
-Pydantic schema for YC Combinator startups
-
-This validates all startup data before it enters the database.
-"""
+"""Pydantic schema for YC Combinator startups"""
 
 from pydantic import BaseModel, validator, HttpUrl
 from typing import Optional, List
@@ -10,15 +6,7 @@ from datetime import datetime
 
 
 class StartupSchema(BaseModel):
-    """
-    Schema for YC Combinator startups
-    
-    Guarantees:
-    - name is never empty
-    - website is a valid URL (if provided)
-    - founded_year is reasonable
-    - All required fields present
-    """
+    """Schema for YC Combinator startups"""
     
     # Required fields
     name: str

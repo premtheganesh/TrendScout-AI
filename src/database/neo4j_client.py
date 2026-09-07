@@ -1,18 +1,4 @@
-"""
-Neo4j Database Client
-
-This module handles connection to Neo4j graph database.
-
-What it does:
-- Connects to Neo4j using credentials from .env
-- Provides methods to run Cypher queries
-- Manages database sessions and transactions
-
-Why we need this:
-- Centralized Neo4j connection management
-- Reusable across all scripts that need Neo4j
-- Similar pattern to MongoDBClient for consistency
-"""
+"""Neo4j Database Client"""
 
 import os
 from neo4j import GraphDatabase
@@ -23,25 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 class Neo4jClient:
-    """
-    Neo4j database client for TrendScout AI project
-
-    Usage:
-        neo4j = Neo4jClient()
-        neo4j.run_query("CREATE (n:Person {name: 'Alice'})")
-        neo4j.close()
-    """
+    """Neo4j database client for TrendScout AI project"""
 
     def __init__(self):
-        """
-        Initialize Neo4j connection using .env credentials
-
-        Reads:
-            NEO4J_URI - bolt://localhost:7687
-            NEO4J_USER - neo4j
-            NEO4J_PASSWORD - your password
-        """
-        load_dotenv()
+        """Initialize Neo4j connection using .env credentials"""
+        load_dotenv(override=True)
 
         self.uri = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
         self.user = os.getenv('NEO4J_USER', 'neo4j')
@@ -52,6 +24,8 @@ class Neo4jClient:
 
         logger.info(f"Connecting to Neo4j at {self.uri}...")
 
+        self.available = False
+
         try:
             self.driver = GraphDatabase.driver(
                 self.uri,
@@ -61,92 +35,57 @@ class Neo4jClient:
             # Verify connection
             self.driver.verify_connectivity()
 
-            logger.info("✅ Connected to Neo4j")
+            self.available = True
+            logger.info("Connected to Neo4j")
 
         except Exception as e:
-            logger.error(f"Failed to connect to Neo4j: {e}")
-            raise
+            logger.warning(
+                f"Neo4j unavailable (graph features disabled): {e}\n"
+                "    Graph endpoints will return 503 until it is reachable."
+            )
+            self.driver = None
 
     def run_query(self, query, parameters=None):
-        """
-        Run a Cypher query and return results
-
-        Args:
-            query: Cypher query string
-            parameters: Dictionary of parameters for the query
-
-        Returns:
-            List of records from the query
-
-        Example:
-            results = neo4j.run_query(
-                "CREATE (n:Person {name: $name}) RETURN n",
-                parameters={'name': 'Alice'}
-            )
-        """
+        """Run a Cypher query and return results"""
+        if not self.available:
+            raise RuntimeError("Neo4j is not available.")
         with self.driver.session() as session:
             result = session.run(query, parameters or {})
             return list(result)
 
     def run_write_query(self, query, parameters=None):
-        """
-        Run a write query (CREATE, MERGE, DELETE, etc.)
-
-        Args:
-            query: Cypher query string
-            parameters: Dictionary of parameters
-
-        Returns:
-            Query result summary
-        """
+        """Run a write query (CREATE, MERGE, DELETE, etc.)"""
+        if not self.available:
+            raise RuntimeError("Neo4j is not available.")
         with self.driver.session() as session:
             result = session.run(query, parameters or {})
             summary = result.consume()
             return summary
 
     def clear_database(self):
-        """
-        DANGER: Deletes all nodes and relationships
-
-        Use this only for:
-        - Testing
-        - Fresh start
-        - Development
-
-        DO NOT use in production without backup!
-        """
-        logger.warning("⚠️  Clearing entire Neo4j database...")
+        """DANGER: Deletes all nodes and relationships"""
+        logger.warning("Clearing entire Neo4j database...")
 
         query = "MATCH (n) DETACH DELETE n"
         self.run_write_query(query)
 
-        logger.info("✅ Database cleared")
+        logger.info("Database cleared")
 
     def get_node_count(self):
-        """
-        Get total number of nodes in database
-
-        Returns:
-            Integer count of all nodes
-        """
+        """Get total number of nodes in database"""
         result = self.run_query("MATCH (n) RETURN count(n) as count")
         return result[0]['count'] if result else 0
 
     def get_relationship_count(self):
-        """
-        Get total number of relationships in database
-
-        Returns:
-            Integer count of all relationships
-        """
+        """Get total number of relationships in database"""
         result = self.run_query("MATCH ()-[r]->() RETURN count(r) as count")
         return result[0]['count'] if result else 0
 
     def close(self):
         """Close the Neo4j connection"""
-        if self.driver:
+        if self.driver and self.available:
             self.driver.close()
-            logger.info("❌ Closed Neo4j connection")
+            logger.info("Closed Neo4j connection")
 
 
 # =============================================================================
@@ -188,5 +127,5 @@ if __name__ == "__main__":
     neo4j.close()
 
     print("\n" + "=" * 70)
-    print("✅ NEO4J CLIENT TEST COMPLETE")
+    print("NEO4J CLIENT TEST COMPLETE")
     print("=" * 70)

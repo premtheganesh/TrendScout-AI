@@ -1,14 +1,4 @@
-"""
-LLM-Powered Data Normalizer
-
-Uses Groq LLM to clean and normalize scraped data before database insertion.
-
-What it does:
-- Cleans messy scraped text
-- Standardizes formats (dates, URLs, locations)
-- Extracts structured information
-- Validates and enriches data
-"""
+"""LLM-Powered Data Normalizer"""
 
 from src.llm.groq_client import GroqClient
 from typing import Dict, Any, Optional
@@ -19,31 +9,15 @@ logger = logging.getLogger(__name__)
 
 
 class DataNormalizer:
-    """
-    Normalize scraped data using LLM
-    
-    Benefits over manual parsing:
-    - Handles messy/inconsistent formats
-    - Extracts implicit information
-    - Standardizes output
-    - More robust than regex
-    """
+    """Normalize scraped data using LLM"""
     
     def __init__(self):
         """Initialize with Groq client"""
         self.llm = GroqClient()
-        logger.info("✅ Data normalizer initialized")
+        logger.info("Data normalizer initialized")
     
     def normalize_startup(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Normalize YC Combinator startup data
-        
-        Args:
-            raw_data: Raw scraped data (messy format)
-            
-        Returns:
-            Clean, structured data ready for StartupSchema
-        """
+        """Normalize YC Combinator startup data"""
         
         # Build prompt
         prompt = f"""
@@ -76,7 +50,7 @@ class DataNormalizer:
                 temperature=0.0
             )
             
-            logger.info(f"✅ Normalized startup: {result.get('name')}")
+            logger.info(f"Normalized startup: {result.get('name')}")
             return result
             
         except Exception as e:
@@ -85,15 +59,7 @@ class DataNormalizer:
             return raw_data
     
     def normalize_article(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Normalize TechCrunch article data
-        
-        Args:
-            raw_data: Raw scraped article
-            
-        Returns:
-            Clean, structured data ready for ArticleSchema
-        """
+        """Normalize TechCrunch article data"""
         
         prompt = f"""
             Extract and normalize article information from this raw data:
@@ -124,7 +90,7 @@ class DataNormalizer:
                 temperature=0.0
             )
             
-            logger.info(f"✅ Normalized article: {result.get('title', '')[:50]}...")
+            logger.info(f"Normalized article: {result.get('title', '')[:50]}...")
             return result
             
         except Exception as e:
@@ -132,15 +98,7 @@ class DataNormalizer:
             return raw_data
     
     def normalize_repo(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Normalize GitHub repository data
-        
-        Args:
-            raw_data: Raw GitHub API response
-            
-        Returns:
-            Clean, structured data ready for RepoSchema
-        """
+        """Normalize GitHub repository data"""
         
         prompt = f"""
             Extract and normalize GitHub repository information from this raw data:
@@ -173,7 +131,7 @@ class DataNormalizer:
                 temperature=0.0
             )
             
-            logger.info(f"✅ Normalized repo: {result.get('full_name')}")
+            logger.info(f"Normalized repo: {result.get('full_name')}")
             return result
             
         except Exception as e:
@@ -181,16 +139,7 @@ class DataNormalizer:
             return raw_data
     
     def enrich_description(self, description: str, context: str = "") -> str:
-        """
-        Enrich a description with better clarity and structure
-        
-        Args:
-            description: Original description
-            context: Additional context (company name, field, etc.)
-            
-        Returns:
-            Enhanced description
-        """
+        """Enrich a description with better clarity and structure"""
         
         prompt = f"""
             Improve this description to be clearer and more informative:

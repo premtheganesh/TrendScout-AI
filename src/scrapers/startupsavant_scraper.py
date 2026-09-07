@@ -18,15 +18,7 @@ class StartupSavantScraper(BaseScraper):
         self.mongo = MongoDBClient()
 
     def extract_startup_data(self, h4_elem) -> Optional[Dict]:
-        """
-        Extract startup data starting from h4 company name element
-
-        Args:
-            h4_elem: BeautifulSoup h4 element with company name
-
-        Returns:
-            Dict with startup data or None
-        """
+        """Extract startup data starting from h4 company name element"""
         try:
             # Extract company name and remove numbering
             name = h4_elem.text.strip()
@@ -94,15 +86,7 @@ class StartupSavantScraper(BaseScraper):
             return None
 
     def scrape_startups_to_watch(self, limit: int = 1) -> int:
-        """
-        Scrape startups from startupsavant.com/startups-to-watch
-
-        Args:
-            limit: Maximum number of startups to scrape
-
-        Returns:
-            Number of startups successfully scraped
-        """
+        """Scrape startups from startupsavant.com/startups-to-watch"""
         url = "https://startupsavant.com/startups-to-watch"
 
         logger.info(f"Scraping Startup Savant from {url}")
@@ -128,7 +112,7 @@ class StartupSavantScraper(BaseScraper):
             if data and data['name'] and data['name'] != 'Unknown':
                 try:
                     doc_id = self.mongo.insert_startup(data)
-                    logger.info(f"✅ Saved: {data['name']} - {data['location']}")
+                    logger.info(f"Saved: {data['name']} - {data['location']}")
                     count += 1
                 except Exception as e:
                     logger.error(f"Failed to save {data.get('name')}: {e}")
