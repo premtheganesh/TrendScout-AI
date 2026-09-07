@@ -60,16 +60,24 @@ a retrieval plan. Respond with JSON only."""
 
 PLANNER_PROMPT = """Analyse this question and produce a retrieval plan.
 
-Available collections:
+{context_block}Available collections:
   "startups"     - AI startup companies (name, description, location, funding, investors)
   "articles"     - TechCrunch news articles (title, description, author, categories)
   "github_repos" - open-source repositories (name, description, language, topics, stars)
+
+If earlier conversation is shown above, resolve any reference the question
+makes to it before writing the plan. "that city", "they", "the company",
+"those" and similar must be replaced with the actual name from the earlier
+turns, because the search engine sees only your search_query and has no
+memory of the conversation.
 
 Return JSON with exactly these keys:
 {{
   "search_query": string   - the query to send to the search engine. Strip
                              conversational filler and keep the substantive
-                             terms. Expand obvious abbreviations.
+                             terms. Expand obvious abbreviations, and
+                             substitute referents with the names they point
+                             to.
   "collection":   string or null - one of the three collection names if the
                              question is clearly about only that kind of
                              thing, otherwise null.
@@ -89,6 +97,10 @@ Question: "What's the latest news on AI coding tools?"
 
 Question: "Tell me about Suno"
 {{"search_query": "Suno AI music generation", "collection": null, "location": null}}
+
+With earlier conversation mentioning Suno in Cambridge, Massachusetts:
+Question: "who else is in that city?"
+{{"search_query": "AI startup Cambridge Massachusetts", "collection": "startups", "location": "Cambridge"}}
 
 Now this question:
 Question: "{question}"
@@ -148,7 +160,17 @@ class RAGPipeline:
             self.llm_available = False
 
     # Stage 1 — understand
-    def plan_query(self, question: str) -> Dict[str, Any]:
+    def plan_query(
+        self,
+        question: str,
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Build a retrieval plan. History matters here, not just when
+        generating: the search engine only ever sees `search_query`, so a
+        follow-up like "who else is in that city?" retrieves nothing
+        relevant unless the referent is resolved at this stage.
+        """
 
         fallback = {
             'search_query': question,
@@ -159,9 +181,19 @@ class RAGPipeline:
         if not self.llm_available:
             return fallback
 
+        context_block = ""
+        if history:
+            transcript = '\n'.join(
+                f"{turn.get('role', 'user').capitalize()}: {turn.get('content', '')[:400]}"
+                for turn in history[-4:] if turn.get('content')
+            )
+            if transcript:
+                context_block = f"Earlier conversation:\n{transcript}\n\n"
+
         try:
             plan = self.llm.generate_json(
-                prompt=PLANNER_PROMPT.format(question=question),
+                prompt=PLANNER_PROMPT.format(
+                    question=question, context_block=context_block),
                 system_prompt=PLANNER_SYSTEM_PROMPT,
                 temperature=0.0,
             )
@@ -304,7 +336,7 @@ class RAGPipeline:
         top_k = top_k or self.context_size
 
         if use_planner:
-            plan = self.plan_query(question)
+            plan = self.plan_query(question, history=history)
         else:
             plan = {'search_query': question, 'collection': None, 'location': None}
 
