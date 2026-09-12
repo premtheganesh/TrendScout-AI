@@ -73,6 +73,37 @@ class GroqClient:
             f"matched. Models this key can reach: {', '.join(available)}"
         )
     
+    # The free tier allows ~8k tokens per minute; a busy digest run trips it.
+    MAX_RATE_LIMIT_RETRIES = 4
+
+    def _create_with_backoff(self, kwargs, reasoning_effort):
+        import re
+        import time
+        from groq import RateLimitError
+
+        for attempt in range(self.MAX_RATE_LIMIT_RETRIES + 1):
+            try:
+                return self.client.chat.completions.create(**kwargs)
+            except RateLimitError as e:
+                if attempt == self.MAX_RATE_LIMIT_RETRIES:
+                    logger.error(f"Groq rate limit, giving up: {e}")
+                    raise
+                match = re.search(r'try again in ([\d.]+)\s*(m?s)', str(e))
+                wait = 15.0
+                if match:
+                    wait = float(match.group(1)) / (1000 if match.group(2) == 'ms' else 1)
+                wait = min(max(wait + 1, 2), 90)
+                logger.warning(f"Groq rate limit; waiting {wait:.0f}s (attempt {attempt + 1})")
+                time.sleep(wait)
+            except Exception as e:
+                # Some models reject reasoning_effort outright.
+                if reasoning_effort and 'reasoning_effort' in str(e) and 'reasoning_effort' in kwargs:
+                    kwargs.pop('reasoning_effort')
+                    reasoning_effort = None
+                    continue
+                logger.error(f"Groq API error: {e}")
+                raise
+
     def generate(
         self,
         prompt: str,
@@ -104,16 +135,7 @@ class GroqClient:
         if reasoning_effort:
             kwargs['reasoning_effort'] = reasoning_effort
 
-        try:
-            response = self.client.chat.completions.create(**kwargs)
-        except Exception as e:
-            # Some models reject reasoning_effort outright.
-            if reasoning_effort and 'reasoning_effort' in str(e):
-                kwargs.pop('reasoning_effort')
-                response = self.client.chat.completions.create(**kwargs)
-            else:
-                logger.error(f"Groq API error: {e}")
-                raise
+        response = self._create_with_backoff(kwargs, reasoning_effort)
 
         choice = response.choices[0]
         content = (choice.message.content or "").strip()

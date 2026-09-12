@@ -79,7 +79,7 @@ with st.sidebar:
 
     page = st.radio(
         "Navigate",
-        ["Ask", "Search", "Knowledge Graph", "Statistics"],
+        ["This Week", "Ask", "Search", "Knowledge Graph", "Statistics"],
         label_visibility="collapsed",
     )
 
@@ -136,7 +136,34 @@ def render_sources(sources: list, key_prefix: str):
             st.divider()
 
 
-if page == "Ask":
+if page == "This Week":
+    st.title("This Week in AI Startups")
+    digests = api_get("/digests") if healthy else None
+    if not digests or not digests.get("items"):
+        st.info("No digest yet. Run `python scripts/generate_digest.py`.")
+    else:
+        weeks = [d["week"] for d in digests["items"]]
+        week = st.selectbox("Week", weeks)
+        digest = api_get(f"/digests/{week}")
+        if digest:
+            st.caption(
+                f"{str(digest.get('week_start', ''))[:10]} → {str(digest.get('week_end', ''))[:10]}"
+                f" · generated {str(digest.get('generated_at', ''))[:16]} · {digest.get('model', '')}"
+            )
+            for section in digest.get("sections", []):
+                st.subheader(section["title"])
+                if section.get("markdown"):
+                    st.markdown(section["markdown"])
+                else:
+                    st.caption("Nothing this week.")
+                with st.expander(f"Sources ({len(section.get('sources', []))})"):
+                    for src in section.get("sources", []):
+                        line = f"**[{src['n']}]** {src['title']} · `{src['type']}`"
+                        if src.get("url"):
+                            line += f" · [link]({src['url']})"
+                        st.markdown(line)
+
+elif page == "Ask":
     st.title("Ask TrendScout")
     st.caption(
         "Retrieval-augmented answers grounded in the indexed corpus. "

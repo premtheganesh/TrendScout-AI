@@ -328,6 +328,7 @@ def root():
             "entities": "/graph/entities",
             "stats": "/stats",
             "documents": "/documents",
+            "digests": "/digests",
             "health": "/health",
             "meta": "/meta",
             "admin_reload": "/admin/reload",
@@ -666,6 +667,40 @@ def get_document(doc_id: str):
     public = _public(doc)
     public['entities'] = doc.get('entities') or []
     return public
+
+
+# --- Digests ---
+
+def _digest_summary(d: Dict) -> Dict:
+    return {
+        'week': d['week'], 'week_start': d.get('week_start'), 'week_end': d.get('week_end'),
+        'generated_at': d.get('generated_at'), 'counts': d.get('counts', {}),
+        'bullets': sum(sec.get('bullets', 0) for sec in d.get('sections', [])),
+    }
+
+
+@app.get("/digests")
+def list_digests(limit: int = Query(default=12, ge=1, le=52)):
+    rows = search_engine.mongo.db.digests.find({}, {'sections': 0, 'input_doc_ids': 0}) \
+        .sort('week_start', -1).limit(limit)
+    items = [_digest_summary(d) for d in rows]
+    return {'items': items, 'count': len(items)}
+
+
+@app.get("/digests/latest")
+def latest_digest():
+    d = search_engine.mongo.db.digests.find_one({}, sort=[('week_start', -1)])
+    if d is None:
+        raise HTTPException(status_code=404, detail="no digest has been generated yet")
+    return d
+
+
+@app.get("/digests/{week}")
+def get_digest(week: str):
+    d = search_engine.mongo.db.digests.find_one({'_id': week})
+    if d is None:
+        raise HTTPException(status_code=404, detail=f"no digest for {week}")
+    return d
 
 
 # --- Operations ---

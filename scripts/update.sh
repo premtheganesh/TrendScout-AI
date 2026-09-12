@@ -27,6 +27,10 @@ INGEST_STATUS=$?
 "$PY" scripts/run_pipeline.py
 PIPELINE_STATUS=$?
 
+if [ "$SCHEDULE" = "weekly" ]; then
+  "$PY" scripts/generate_digest.py --week previous || echo "digest: nothing to write or generation failed"
+fi
+
 # Hot-reload a running API, if any.
 if [ -f "$ROOT/.env" ]; then
   TOKEN="$(grep '^ADMIN_TOKEN=' "$ROOT/.env" | cut -d= -f2-)"

@@ -3,7 +3,7 @@
 Living document. Updated at the end of every phase with what was built,
 what changed from the plan, and the measured numbers.
 
-Last updated: 2026-09-12 (Phase 6)
+Last updated: 2026-09-12 (Phase 7)
 
 ---
 
@@ -179,7 +179,7 @@ this file.
 | 4 | Incremental processing + scheduling | ✅ done 2026-09-12 |
 | 5 | Remaining sources | ✅ done 2026-09-12 |
 | 6 | Time-aware retrieval + API hardening | ✅ done 2026-09-12 |
-| 7 | Weekly digest | ⬜ |
+| 7 | Weekly digest | ✅ done 2026-09-12 |
 | 8 | Companies + funding | ⬜ |
 | 9 | Trends | ⬜ |
 | 10 | Next.js frontend | ⬜ |
@@ -383,3 +383,23 @@ Acceptance (live, real LLM):
 Deviations from plan:
 - Planner routing needed a wording fix: "funding rounds" first went to `startup` (YC profiles) instead of `article`; the type catalogue now distinguishes company profiles from news, with an example.
 - Re-labelling the 22-query evaluation set against the live corpus (noted in Phase 3) is deferred to the end of the roadmap: the frozen corpus already guards against regressions, and the corpus is still changing shape.
+
+### Phase 7 — Weekly digest (2026-09-12)
+
+Planned:
+- [x] `src/digest/weeks.py` (ISO weeks, Monday→Monday UTC; `current` / `previous` / `YYYY-Www`), `select.py` (deterministic grouping: launches by points, funding articles by title regex newest first, repos by stars / models by trending / papers by upvotes; caps 10/10/12), `generate.py`
+- [x] Citation numbers assigned globally **before** any model call; one call per section with only that section's numbered sources; every `[n]` validated — unknown numbers stripped and counted, uncited bullets counted
+- [x] `digests` collection keyed by week with `input_hash` (sorted doc ids + content hashes), `input_doc_ids`, `model`, `prompt_version`, per-section markdown + sources, warnings
+- [x] `scripts/generate_digest.py --week current|previous|YYYY-Www [--force]`; the weekly launchd job now generates the previous week's digest after the pipeline
+- [x] `GET /digests`, `/digests/latest`, `/digests/{week}`; Streamlit "This Week" page
+- [x] Tests: 278 passed (+16: weeks, funding regex, validation, selection, numbering, idempotency, API)
+
+Acceptance:
+- `generate_digest.py --week current` → **generated**: 32 inputs (10 launches, 10 funding, 12 open source), 27 bullets, `warnings: {invalid_citations: 0, uncited_bullets: 0}`
+- Run again → **unchanged**, same `input_hash`, no model call; one document in `digests`
+- Unit test: a stub model that cites `[999]` has it stripped and counted; a changed `content_hash` or `--force` regenerates
+- API test checks every citation in every stored section resolves to one of its sources
+
+Deviations from plan:
+- Groq's free tier allows 8,000 tokens/minute; the first real run hit 429. Per-source context in the digest prompt was cut to 320 chars and section caps to 10/10/12 so one section fits one call, and `GroqClient` now backs off on rate limits (parses "try again in Xs", up to 4 retries).
+- Funding section is regex-selected articles for now (as planned); Phase 8 upgrades it to structured rounds.

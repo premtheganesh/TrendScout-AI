@@ -209,6 +209,27 @@ class TestDocumentsEndpoint:
         assert client.get('/documents/not-an-id').status_code == 404
 
 
+class TestDigestEndpoints:
+    def test_list_and_latest_agree(self, client):
+        listing = client.get('/digests').json()
+        latest = client.get('/digests/latest')
+        if not listing['items']:
+            assert latest.status_code == 404
+            pytest.skip('no digest generated yet')
+        assert latest.status_code == 200
+        digest = latest.json()
+        assert digest['week'] == listing['items'][0]['week']
+        assert {s['key'] for s in digest['sections']} == {'launches', 'funding', 'open_source'}
+        for section in digest['sections']:
+            numbers = {src['n'] for src in section['sources']}
+            import re
+            cited = {int(n) for n in re.findall(r'\[(\d+)\]', section['markdown'])}
+            assert cited <= numbers                       # every citation resolves
+
+    def test_unknown_week_is_404(self, client):
+        assert client.get('/digests/1999-W01').status_code == 404
+
+
 class TestOperationsEndpoints:
     def test_health(self, client):
         payload = client.get('/health').json()

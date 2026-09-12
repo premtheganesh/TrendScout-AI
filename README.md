@@ -123,6 +123,24 @@ What this shows:
 
 Differences under ~0.01 on 22 queries are noise.
 
+## Weekly digest
+
+```bash
+python scripts/generate_digest.py                  # current ISO week
+python scripts/generate_digest.py --week previous  # what the Monday job runs
+```
+
+One document per ISO week in `digests`, in three sections — Launches,
+Funding, Open source & models — written only from that week's documents.
+Selection and ordering are deterministic (launches by points, funding
+newest first, repos by stars, models by trending score, papers by
+upvotes) and citation numbers are assigned *before* the model sees
+anything; each section is generated with only its own numbered sources,
+and any `[n]` the model invents is stripped and counted. A digest stores
+the hash of its inputs, so re-running the script for an unchanged week
+makes no model call. Served at `/digests`, `/digests/latest`,
+`/digests/{week}` and on the Streamlit "This Week" page.
+
 ## Quick start
 
 ```bash
@@ -229,6 +247,7 @@ grows, because the evaluation never reads the live database.
 | `POST` | `/search`                 | Hybrid search; typed filters (`type`, `location`, `source`, `since_days`) |
 | `GET`  | `/documents`              | Newest documents, filter by type/source/window |
 | `GET`  | `/documents/{id}`         | One document with its entities              |
+| `GET`  | `/digests`, `/digests/latest`, `/digests/{week}` | Weekly digests          |
 | `POST` | `/similar`                | "More like this" by embedding             |
 | `POST` | `/graph/query`            | Read-only Cypher (bearer `ADMIN_TOKEN`)   |
 | `GET`  | `/graph/entities`         | Most-mentioned entities                   |
@@ -300,6 +319,10 @@ src/
     embed.py, index.py    E5 for stale docs; FAISS + BM25 from stored vectors
     snapshots.py          daily star/fork history per repo
   graph/neo4j_import.py   MongoDB -> Neo4j merge (used by the pipeline)
+  digest/
+    weeks.py              ISO week arithmetic
+    select.py             the week's documents, grouped and ordered
+    generate.py           numbered sources -> per-section LLM calls -> validated markdown
   search/
     hybrid_search.py      three-channel retrieval + RRF
     bm25_index.py         Okapi BM25 over the corpus
@@ -316,6 +339,7 @@ src/
 scripts/
   ingest.py               fetch sources into MongoDB
   run_pipeline.py         process what changed
+  generate_digest.py      write the week's digest (no-op if inputs unchanged)
   update.sh               ingest + pipeline + API reload (what launchd runs)
   install_schedule.sh     install the launchd jobs
   build_indexes.py        alias: run_pipeline.py --stages refresh,embed,index
