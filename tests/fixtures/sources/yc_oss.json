@@ -1,0 +1,15 @@
+[
+  {"id": 1, "name": "Suno", "slug": "suno-ai", "batch": "Winter 2024",
+   "one_liner": "AI music generation", "long_description": "Suno lets anyone make a song with AI.",
+   "all_locations": "Cambridge, MA, USA", "tags": ["Generative AI", "Music"],
+   "industries": ["Consumer"], "regions": ["America / Canada"], "team_size": 20,
+   "status": "Active", "stage": "Growth", "isHiring": true, "launched_at": 1704067200,
+   "website": "https://suno.com", "url": "https://www.ycombinator.com/companies/suno-ai"},
+  {"id": 2, "name": "Old Bakery", "slug": "old-bakery", "batch": "Summer 2015",
+   "one_liner": "AI for bakeries", "long_description": "", "all_locations": "",
+   "tags": ["Artificial Intelligence"], "industries": [], "regions": [], "launched_at": null},
+  {"id": 3, "name": "Plain Fintech", "slug": "plain-fintech", "batch": "Winter 2025",
+   "one_liner": "Payments for SMBs", "long_description": "Nothing about machines learning here.",
+   "all_locations": "New York, NY, USA", "tags": ["Fintech", "Payments"], "industries": ["Fintech"]},
+  {"id": 4, "name": "", "slug": "nameless", "batch": "Winter 2025", "tags": ["AI"]}
+]

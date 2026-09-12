@@ -121,6 +121,7 @@ python -m spacy download en_core_web_sm
 
 cp .env.example .env        # then fill in GROQ_API_KEY and MongoDB/Neo4j
 
+python scripts/ingest.py               # fetch every source into MongoDB
 python scripts/extract_entities.py     # NER + canonical entity index
 python scripts/build_indexes.py        # E5 embeddings -> FAISS, and BM25
 python scripts/setup_neo4j_schema.py   # optional
@@ -137,6 +138,31 @@ from MongoDB.
 
 All configuration is read from `.env` through `src/config.py`; any value can
 be overridden per process (`MONGODB_DB=... INDEX_DIR=... python ...`).
+
+### Ingestion
+
+```bash
+python scripts/ingest.py --list                        # configured sources
+python scripts/ingest.py                               # all sources, default windows
+python scripts/ingest.py --source techcrunch_ai --days 56 --max-pages 30   # backfill
+python scripts/ingest.py --dry-run                     # fetch + normalise, write nothing
+```
+
+Every source is a class with two methods: `fetch(since)` talks to the
+network, `normalize(raw)` is pure and is unit-tested on saved fixtures with
+sockets disabled. The runner adds identity (`doc_key`), `event_at` and
+`content_hash`, then upserts: a document seen before with the same text is
+`unchanged`, with different text is `changed`, otherwise `new`. Re-running
+a source over the same window therefore reports `new=0 changed=0`. Each
+source runs in isolation and writes one row to the `runs` collection
+(counts, duration, status, error), so one broken feed never blocks the
+others.
+
+| Source | Type | What |
+| --- | --- | --- |
+| `yc_oss` | startup | Y Combinator directory via the yc-oss JSON mirror, AI-tagged companies from 2023+ batches |
+| `techcrunch_ai` | article | TechCrunch AI category feed, paged |
+| `github_new` | repo | Repositories created in the window for `llm`, `generative-ai`, `ai-agents`, `rag`; top 60 by stars, awesome-lists skipped |
 
 ### Reproducing the evaluation
 
@@ -204,6 +230,14 @@ src/
     types.py              document type registry (the only list of types)
     identity.py           doc_key, canonical URLs, content_hash
     dates.py              event_at / first_seen_at parsing
+  sources/
+    base.py               Source: fetch(since) + normalize(raw)
+    rss.py                generic RSS/Atom source (one class, many feeds)
+    yc_oss.py, github.py  the other sources
+    registry.py           every configured source
+  ingest/
+    store.py              upsert by doc_key: new / changed / unchanged
+    runner.py             run sources in isolation, log to `runs`
   search/
     hybrid_search.py      three-channel retrieval + RRF
     bm25_index.py         Okapi BM25 over the corpus
@@ -218,6 +252,7 @@ src/
   ui/app.py               Streamlit
   config.py               all settings, from .env / environment
 scripts/
+  ingest.py               fetch sources into MongoDB
   build_indexes.py        rebuild FAISS + BM25 into INDEX_DIR
   migrate_to_documents.py one-time move from per-type collections (done)
   extract_entities.py     NER + canonical entity index

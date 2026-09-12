@@ -80,9 +80,15 @@ def ndcg_at_k(retrieved: List[str], gains: Dict[str, int], k: int) -> float:
 # ---------------------------------------------------------------------------
 def build_name_index(mongo) -> Dict[str, str]:
     """Map every document title to its _id."""
-    index = {}
+    index, duplicates = {}, set()
     for doc in mongo.db[COLLECTION].find():
-        index[document_title(doc, doc.get('type'))] = str(doc['_id'])
+        title = document_title(doc, doc.get('type'))
+        if title in index:
+            duplicates.add(title)
+        index[title] = str(doc['_id'])
+    if duplicates:
+        print(f"\n  WARNING — {len(duplicates)} titles are shared by more than one "
+              f"document; labels on them are ambiguous: {sorted(duplicates)[:8]}")
     return index
 
 

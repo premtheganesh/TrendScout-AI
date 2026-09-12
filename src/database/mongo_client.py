@@ -17,7 +17,9 @@ class MongoDBClient:
         settings = get_settings()
         self.uri = uri or settings.mongodb_uri
         self.db_name = db_name or settings.mongodb_db
-        self.client = MongoClient(self.uri)
+        # tz_aware: stored UTC datetimes come back timezone-aware, so they
+        # compare correctly against datetime.now(timezone.utc).
+        self.client = MongoClient(self.uri, tz_aware=True)
         self.db = self.client[self.db_name]
         logger.info(f"Connected to MongoDB {self.db_name}")
     

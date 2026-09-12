@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel>
+  <title>TechCrunch AI</title>
+  <item>
+    <title>Acme AI raises $50M Series B to automate&#160;compliance</title>
+    <link>https://techcrunch.com/2026/09/10/acme-ai-raises-50m/?utm_source=rss&amp;utm_medium=feed</link>
+    <pubDate>Thu, 10 Sep 2026 14:02:11 +0000</pubDate>
+    <dc:creator>Julie Bort</dc:creator>
+    <category>AI</category>
+    <category>Fundraising</category>
+    <description><![CDATA[<p>Acme AI, a <a href="https://acme.ai">compliance startup</a>, raised <b>$50 million</b>.</p>]]></description>
+  </item>
+  <item>
+    <title>Podcast: the week in AI</title>
+    <link>https://techcrunch.com/2026/09/09/podcast-week-in-ai/</link>
+    <pubDate>Wed, 09 Sep 2026 09:00:00 +0000</pubDate>
+    <description>Plain text summary.</description>
+  </item>
+  <item>
+    <title></title>
+    <link>https://techcrunch.com/broken</link>
+  </item>
+</channel>
+</rss>

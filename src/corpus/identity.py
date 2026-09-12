@@ -51,11 +51,15 @@ def name_key(name: str) -> str:
 def doc_key(doc: Dict, doc_type: str) -> str:
     """The unique key for a document of the given type."""
     if doc_type == 'startup':
+        # A YC directory URL is identity on its own, whatever the source says.
+        for field in ('company_url', 'url'):
+            url = doc.get(field) or ''
+            if 'ycombinator.com' in url.lower():
+                match = _YC_SLUG.search(url)
+                if match:
+                    return f'startup:yc:{match.group(1).lower()}'
         source = (doc.get('source') or 'manual').lower()
         if source == 'ycombinator':
-            match = _YC_SLUG.search(doc.get('company_url') or doc.get('url') or '')
-            if match:
-                return f'startup:yc:{match.group(1).lower()}'
             source = 'yc'
         elif source == 'startupsavant':
             source = 'savant'
