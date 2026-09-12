@@ -9,8 +9,7 @@ Fetch every configured source (or one) into MongoDB.
 
 Each run writes one row per source to the `runs` collection. Re-running
 a source over the same window reports new=0 changed=0: upserts are keyed
-on doc_key. Afterwards: python scripts/run_pipeline.py (Phase 4) or, for
-now, extract_entities.py + build_indexes.py.
+on doc_key. Afterwards: python scripts/run_pipeline.py
 """
 
 import sys
@@ -35,6 +34,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--source', action='append', help='run only this source (repeatable)')
+    parser.add_argument('--schedule', choices=['daily', 'weekly', 'monthly'],
+                        help='run only sources with this schedule')
     parser.add_argument('--since', help='ISO date; overrides the source default window')
     parser.add_argument('--days', type=int, help='window in days; overrides the default')
     parser.add_argument('--max-pages', type=int,
@@ -51,6 +52,8 @@ def main():
         return
 
     selected = list(sources.values())
+    if args.schedule:
+        selected = [s for s in selected if s.schedule == args.schedule]
     if args.source:
         unknown = [n for n in args.source if n not in sources]
         if unknown:

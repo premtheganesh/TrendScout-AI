@@ -117,15 +117,13 @@ Differences under ~0.01 on 22 queries are noise.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m spacy download en_core_web_sm
+python -m spacy download en_core_web_trf
 
 cp .env.example .env        # then fill in GROQ_API_KEY and MongoDB/Neo4j
 
 python scripts/ingest.py               # fetch every source into MongoDB
-python scripts/extract_entities.py     # NER + canonical entity index
-python scripts/build_indexes.py        # E5 embeddings -> FAISS, and BM25
-python scripts/setup_neo4j_schema.py   # optional
-python scripts/import_to_neo4j.py
+python scripts/run_pipeline.py         # NER, embeddings, indexes, snapshots (incremental)
+python scripts/setup_neo4j_schema.py   # optional; the pipeline syncs Neo4j when it is up
 
 python src/api/main.py                 # API -> localhost:8000/docs
 streamlit run src/ui/app.py            # UI  -> localhost:8501
@@ -147,6 +145,30 @@ python scripts/ingest.py                               # all sources, default wi
 python scripts/ingest.py --source techcrunch_ai --days 56 --max-pages 30   # backfill
 python scripts/ingest.py --dry-run                     # fetch + normalise, write nothing
 ```
+
+### Processing and scheduling
+
+```bash
+python scripts/run_pipeline.py                        # everything that changed
+python scripts/run_pipeline.py --stages embed,index   # some stages
+python scripts/run_pipeline.py --force                # redo every document
+scripts/update.sh daily                               # ingest due sources + pipeline + API reload
+scripts/install_schedule.sh                           # launchd: daily 07:30, weekly Mon 08:00
+```
+
+The pipeline is incremental. Each document's `content_hash` is the sha1 of
+exactly the text that gets indexed; entities and embeddings record the
+hash they were computed from, and each stage redoes only rows whose hash
+moved. A daily run with 50 new articles extracts and embeds 50 documents,
+then rebuilds FAISS and BM25 from stored vectors in well under a second.
+Star counts are kept out of the indexed text on purpose, so a weekly star
+tick does not force a re-embed; their history goes to `metric_snapshots`
+instead, one row per document per day.
+
+A running API picks up new indexes without a restart:
+`POST /admin/reload` with `Authorization: Bearer $ADMIN_TOKEN`. `GET /meta`
+reports what is indexed, when it was built, and what every source last
+did.
 
 Every source is a class with two methods: `fetch(since)` talks to the
 network, `normalize(raw)` is pure and is unit-tested on saved fixtures with
@@ -191,6 +213,9 @@ grows, because the evaluation never reads the live database.
 | `GET`  | `/graph/entities`         | Most-mentioned entities                   |
 | `GET`  | `/graph/startup/{name}`   | One startup's entity neighbourhood        |
 | `GET`  | `/stats`                  | Corpus and index counts                   |
+| `GET`  | `/health`                 | Liveness, document and vector counts      |
+| `GET`  | `/meta`                   | Freshness per source, index build time    |
+| `POST` | `/admin/reload`           | Re-read indexes (bearer `ADMIN_TOKEN`)    |
 
 ```bash
 curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
@@ -238,6 +263,13 @@ src/
   ingest/
     store.py              upsert by doc_key: new / changed / unchanged
     runner.py             run sources in isolation, log to `runs`
+  pipeline/
+    run.py                stages: refresh, entities, embed, index, snapshots, neo4j
+    hashes.py             content_hash upkeep; adopts pre-marker rows
+    entities.py           NER for stale docs; atomic canonical_entities swap
+    embed.py, index.py    E5 for stale docs; FAISS + BM25 from stored vectors
+    snapshots.py          daily star/fork history per repo
+  graph/neo4j_import.py   MongoDB -> Neo4j merge (used by the pipeline)
   search/
     hybrid_search.py      three-channel retrieval + RRF
     bm25_index.py         Okapi BM25 over the corpus
@@ -253,9 +285,12 @@ src/
   config.py               all settings, from .env / environment
 scripts/
   ingest.py               fetch sources into MongoDB
-  build_indexes.py        rebuild FAISS + BM25 into INDEX_DIR
+  run_pipeline.py         process what changed
+  update.sh               ingest + pipeline + API reload (what launchd runs)
+  install_schedule.sh     install the launchd jobs
+  build_indexes.py        alias: run_pipeline.py --stages refresh,embed,index
   migrate_to_documents.py one-time move from per-type collections (done)
-  extract_entities.py     NER + canonical entity index
+  extract_entities.py     alias: run_pipeline.py --stages refresh,entities
   evaluate_retrieval.py   metrics, ablations, weight sweep
   export_eval_corpus.py   freeze the corpus as a snapshot
   load_eval_corpus.py     load a snapshot into a separate database
@@ -279,5 +314,5 @@ runs only the offline ones.
 
 ## Stack
 
-Python 3.13, MongoDB, Neo4j, FAISS, rank-bm25, intfloat/e5-base-v2, spaCy,
+Python 3.13, MongoDB, Neo4j, FAISS, rank-bm25, intfloat/e5-base-v2, spaCy (en_core_web_trf),
 Groq, FastAPI, Streamlit, pytest.

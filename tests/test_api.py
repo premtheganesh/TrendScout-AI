@@ -144,6 +144,44 @@ class TestChatEndpoint:
         assert payload['search_query'] == 'raw question here'
 
 
+class TestOperationsEndpoints:
+    def test_health(self, client):
+        payload = client.get('/health').json()
+        assert payload['status'] == 'ok'
+        assert payload['documents'] > 0 and payload['vectors'] > 0
+
+    def test_meta_reports_freshness(self, client):
+        payload = client.get('/meta').json()
+        assert payload['documents']['total'] > 0
+        assert payload['index']['dimension'] == 768
+        assert 'sources' in payload and 'newest_event_at' in payload
+
+    def test_reload_requires_a_token(self, client, monkeypatch):
+        from src.config import get_settings
+        monkeypatch.setenv('ADMIN_TOKEN', 'secret-for-test')
+        get_settings.cache_clear()
+        try:
+            assert client.post('/admin/reload').status_code == 401
+            assert client.post('/admin/reload',
+                               headers={'Authorization': 'Bearer wrong'}).status_code == 401
+            response = client.post('/admin/reload',
+                                   headers={'Authorization': 'Bearer secret-for-test'})
+            assert response.status_code == 200
+            assert response.json()['reloaded'] is True
+        finally:
+            get_settings.cache_clear()
+
+    def test_reload_is_closed_when_no_token_is_configured(self, client, monkeypatch):
+        from src.config import get_settings
+        monkeypatch.setenv('ADMIN_TOKEN', '')
+        get_settings.cache_clear()
+        try:
+            assert client.post('/admin/reload',
+                               headers={'Authorization': 'Bearer '}).status_code == 503
+        finally:
+            get_settings.cache_clear()
+
+
 class TestStatsEndpoint:
     def test_reports_corpus_and_index_size(self, client):
         stats = client.get('/stats').json()

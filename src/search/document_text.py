@@ -96,9 +96,9 @@ def document_text(doc: Dict, doc_type: str = None) -> str:
         topics = _coerce_list(doc.get('topics'))
         if topics:
             parts.append(f"Topics: {', '.join(topics)}")
-        stars = _clean(doc.get('stars'))
-        if stars:
-            parts.append(f"{stars} GitHub stars")
+        # Star counts are deliberately NOT part of the text: they change
+        # weekly, and content_hash over this text decides what gets
+        # re-embedded. The number is stored on the document for display.
 
     else:
         for field in ('name', 'title', 'full_name', 'description', 'summary'):

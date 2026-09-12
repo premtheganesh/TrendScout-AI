@@ -11,12 +11,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Dict, Optional, Any
 import logging
 
+from src.config import get_settings
 from src.corpus.types import COLLECTION, TYPE_NAMES
 from src.search.document_text import document_title, document_url
 from src.search.hybrid_search import HybridSearchEngine
@@ -217,6 +218,16 @@ class SimilarDocRequest(BaseModel):
     })
 
 
+def require_admin(authorization: Optional[str] = Header(default=None)):
+    """Bearer ADMIN_TOKEN. 503 when no token is configured at all, so an
+    unset token can never mean 'open'."""
+    token = get_settings().admin_token
+    if not token:
+        raise HTTPException(status_code=503, detail="ADMIN_TOKEN is not configured")
+    if authorization != f"Bearer {token}":
+        raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+
+
 def require_neo4j():
     """Raise 503 if Neo4j is not available."""
     if neo4j_client is None or not neo4j_client.available:
@@ -258,6 +269,9 @@ async def root():
             "graph_query": "/graph/query",
             "entities": "/graph/entities",
             "stats": "/stats",
+            "health": "/health",
+            "meta": "/meta",
+            "admin_reload": "/admin/reload",
             "docs": "/docs"
         }
     }
@@ -534,6 +548,87 @@ async def get_startup_entities(startup_name: str):
     except Exception as e:
         logger.error(f"Startup entities error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Operations ---
+
+@app.get("/health")
+def health():
+    """Liveness plus the two numbers that say whether search can work."""
+    return {
+        "status": "ok",
+        "documents": search_engine.documents.count_documents({}),
+        "vectors": search_engine.faiss_index.ntotal,
+        "index_built_at": search_engine.built_at,
+    }
+
+
+@app.get("/meta")
+def meta():
+    """Freshness: what is indexed, when, and what each source last did."""
+    db = search_engine.mongo.db
+    by_type = {name: 0 for name in TYPE_NAMES}
+    for row in search_engine.documents.aggregate(
+            [{'$group': {'_id': '$type', 'n': {'$sum': 1}}}]):
+        by_type[row['_id'] or 'unknown'] = row['n']
+
+    newest = search_engine.documents.find_one(
+        {'event_at': {'$ne': None}}, {'event_at': 1}, sort=[('event_at', -1)])
+    last_seen = search_engine.documents.find_one({}, {'last_seen_at': 1},
+                                                 sort=[('last_seen_at', -1)])
+
+    sources = []
+    for row in db.runs.aggregate([
+        {'$match': {'source': {'$ne': 'pipeline'}, 'dry_run': {'$ne': True}}},
+        {'$sort': {'started_at': -1}},
+        {'$group': {'_id': '$source', 'last': {'$first': '$$ROOT'}}},
+        {'$sort': {'_id': 1}},
+    ]):
+        last = row['last']
+        sources.append({
+            'source': row['_id'],
+            'type': last.get('type'),
+            'last_run_at': last.get('started_at'),
+            'status': last.get('status'),
+            'new': last.get('new', 0),
+            'changed': last.get('changed', 0),
+            'error': last.get('error'),
+        })
+    last_pipeline = db.runs.find_one({'source': 'pipeline'}, sort=[('started_at', -1)])
+
+    return {
+        "documents": {"total": sum(by_type.values()), "by_type": by_type},
+        "entities": db.canonical_entities.count_documents({}),
+        "index": {
+            "built_at": search_engine.built_at,
+            "vectors": search_engine.faiss_index.ntotal,
+            "dimension": search_engine.faiss_index.d,
+        },
+        "newest_event_at": newest['event_at'] if newest else None,
+        "last_ingested_at": last_seen.get('last_seen_at') if last_seen else None,
+        "sources": sources,
+        "last_pipeline": {
+            "started_at": last_pipeline.get('started_at'),
+            "status": last_pipeline.get('status'),
+            "stages": list((last_pipeline.get('results') or {}).keys()),
+        } if last_pipeline else None,
+    }
+
+
+@app.post("/admin/reload", dependencies=[Depends(require_admin)])
+def admin_reload():
+    """Re-read the index files after a pipeline run — no restart needed."""
+    try:
+        search_engine.reload()
+    except Exception as e:
+        logger.error(f"Reload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"reload failed: {e}")
+    return {
+        "reloaded": True,
+        "vectors": search_engine.faiss_index.ntotal,
+        "bm25_documents": len(search_engine.bm25),
+        "index_built_at": search_engine.built_at,
+    }
 
 
 # --- Statistics ---

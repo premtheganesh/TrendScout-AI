@@ -3,7 +3,7 @@
 Living document. Updated at the end of every phase with what was built,
 what changed from the plan, and the measured numbers.
 
-Last updated: 2026-09-12 (Phase 3)
+Last updated: 2026-09-12 (Phase 4)
 
 ---
 
@@ -63,8 +63,8 @@ Known problems this project fixes:
 - ~~Scrapers `insert_one` → duplicates on re-run~~ (fixed in Phase 3: upsert by `doc_key`).
 - ~~YC scraper pinned to 2025 batches and fragile CSS classes; GitHub query
   returns the same all-time-top repos every run; TechCrunch feed holds 20 items~~ (fixed in Phase 3).
-- No pipeline runner or scheduler (Phase 4); ~~no run log~~ (`runs` collection, Phase 3); ~~Neo4j import blocks on `input()`~~ (Phase 2).
-- API loads indexes once with no reload; ~~collection names hardcoded in ~15 files~~ (fixed in Phase 2: one registry).
+- ~~No pipeline runner or scheduler~~ (Phase 4); ~~no run log~~ (Phase 3); ~~Neo4j import blocks on `input()`~~ (Phase 2).
+- ~~API loads indexes once with no reload~~ (`/admin/reload`, Phase 4); ~~collection names hardcoded in ~15 files~~ (Phase 2).
 - `/graph/query` runs arbitrary Cypher unauthenticated; `/search` forwards a
   raw MongoDB filter from the client; CORS is `*`; endpoints are `async def`
   around blocking calls.
@@ -176,7 +176,7 @@ this file.
 | 1 | Config + frozen evaluation corpus | ✅ done 2026-09-12 |
 | 2 | Unified `documents` collection | ✅ done 2026-09-12 |
 | 3 | Ingestion framework + first 3 sources | ✅ done 2026-09-12 |
-| 4 | Incremental processing + scheduling | ⬜ |
+| 4 | Incremental processing + scheduling | ✅ done 2026-09-12 |
 | 5 | Remaining sources | ⬜ |
 | 6 | Time-aware retrieval + API hardening | ⬜ |
 | 7 | Weekly digest | ⬜ |
@@ -310,3 +310,30 @@ Deviations from plan:
 - `GITHUB_TOKEN` in `.env` is rejected by GitHub (401). The source now degrades to unauthenticated rather than failing, but **the token should be replaced** — with a valid one the backfill takes 20 s instead of 3 min.
 - Ten YC company names collide with other titles (`Candor`, `Conduit`, `Laminar`…); the evaluator now warns about ambiguous labels. None of the 22 queries' labels are affected.
 - The entity-coverage integrity test was relaxed from 100% to ≥95%: 13 documents with one-word descriptions legitimately yield no entities.
+
+### Phase 4 — Incremental processing + scheduling (2026-09-12)
+
+Planned:
+- [x] `src/pipeline/` stages `refresh → entities → embed → index → snapshots → neo4j`, driven by `content_hash` vs `entities_hash` / `embedding_hash`; heavy models load lazily
+- [x] `refresh` recomputes `content_hash` (so a change to `document_text()` is picked up), adopts pre-marker rows, and converts list embeddings to float32 binary
+- [x] `stars` removed from repo text; frozen baseline re-measured: **0.882** (was 0.881; dense 0.887, BM25 0.746) — neutral-to-positive
+- [x] Embeddings stored as float32 BSON binary (3 KB/doc vs 9 KB); FAISS + BM25 rebuilt from stored vectors in 0.2 s for 2,452 docs
+- [x] `canonical_entities` rebuilt into a temp collection and swapped with `renameCollection(dropTarget=True)`
+- [x] `metric_snapshots`: one row per repo per day (unique index), 482 captured; history starts now
+- [x] Neo4j stage skips (not fails) when unreachable; import moved to `src/graph/neo4j_import.py`, script kept as a verbose wrapper with `--fresh` / `--yes`
+- [x] API: `GET /health`, `GET /meta` (counts, index build time, last run per source, last pipeline, newest `event_at`), `POST /admin/reload` behind bearer `ADMIN_TOKEN` (503 when unconfigured, 401 when wrong)
+- [x] `scripts/run_pipeline.py --stages --force`; `build_indexes.py` / `extract_entities.py` kept as aliases
+- [x] `scripts/update.sh daily|weekly` (ingest due sources → pipeline → reload) and launchd jobs installed via `scripts/install_schedule.sh`: daily 07:30, weekly Monday 08:00, logs in `logs/`
+- [x] Tests: 223 passed (+13 pipeline against a throwaway DB with fake models, +4 ops endpoints, +2 integrity)
+
+Acceptance:
+- Live run after the text change: `refresh` converted 2,452 vectors; `entities` processed **482** (only the repos), `embed` **482**, `index` 0.2 s — total 38 s. Second run: 0 / 0, 9 s.
+- `/meta` shows index build time, per-type counts, per-source last run and the last pipeline.
+- Hot reload, verified on a private port: same server PID, `index_built_at` advanced after `POST /admin/reload`; 401 without the token.
+- `scripts/update.sh daily` end to end: ingest → pipeline → "api reloaded".
+
+Deviations from plan:
+- **Segfault found and fixed:** importing `faiss` before loading spaCy's `en_core_web_trf` crashes the process on macOS (OpenMP runtime clash; reproduced in isolation, order-dependent). `faiss` is now imported lazily inside the index stage and the pipeline loads the extractor before any stage runs.
+- The entity extractor had always defaulted to `en_core_web_trf`, not the `en_core_web_sm` the docs claimed; config now says `trf` explicitly and the README download line is corrected.
+- `update.sh` treats any non-2xx from `/admin/reload` as "not reloaded" (a first version printed "reloaded" on a 404).
+- Neo4j stage still unverified live — Neo4j Desktop's database was not started. Two stale copies of the user's own API were found listening on port 8000 (PIDs 41269, 52952, one on old code); left running, user to restart.

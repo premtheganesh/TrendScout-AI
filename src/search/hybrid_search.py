@@ -60,39 +60,51 @@ class HybridSearchEngine:
 
         settings = get_settings()
         self.index_dir = os.path.abspath(index_dir or settings.index_dir)
+        self.graph = GraphExpander(self.mongo, neo4j_client=neo4j_client)
+        self.reload()
+
+    def reload(self) -> None:
+        """(Re)read the index files. Builds everything before swapping, so
+        a request in flight sees either the old indexes or the new ones."""
         index_path = os.path.join(self.index_dir, 'faiss_index.bin')
         metadata_path = os.path.join(self.index_dir, 'faiss_metadata.pkl')
 
         if not os.path.exists(index_path):
             raise FileNotFoundError(
                 f"FAISS index not found at {index_path}. "
-                "Run: python scripts/build_indexes.py"
+                "Run: python scripts/run_pipeline.py"
             )
 
-        self.faiss_index = faiss.read_index(index_path)
+        faiss_index = faiss.read_index(index_path)
         with open(metadata_path, 'rb') as f:
-            self.faiss_metadata = pickle.load(f)
+            faiss_metadata = pickle.load(f)
 
-        if self.faiss_index.d != self.generator.dimension:
+        if faiss_index.d != self.generator.dimension:
             raise ValueError(
                 f"Index/model dimension mismatch: FAISS index is "
-                f"{self.faiss_index.d}-dim but the embedding model produces "
+                f"{faiss_index.d}-dim but the embedding model produces "
                 f"{self.generator.dimension}-dim vectors. Rebuild the index."
             )
 
-        if self.faiss_metadata['metadata'] and 'type' not in self.faiss_metadata['metadata'][0]:
+        if faiss_metadata['metadata'] and 'type' not in faiss_metadata['metadata'][0]:
             raise ValueError(
                 f"FAISS metadata at {metadata_path} predates the unified "
-                "documents collection. Run: python scripts/build_indexes.py"
+                "documents collection. Run: python scripts/run_pipeline.py"
             )
 
-        self.bm25 = BM25Index.load(os.path.join(self.index_dir, 'bm25_index.pkl'))
-        self.graph = GraphExpander(self.mongo, neo4j_client=neo4j_client)
+        bm25 = BM25Index.load(os.path.join(self.index_dir, 'bm25_index.pkl'))
+
+        self.faiss_index, self.faiss_metadata, self.bm25 = faiss_index, faiss_metadata, bm25
+        self.graph._total_docs = None     # corpus size is cached; it changed
 
         logger.info(
             f"Ready - {self.faiss_index.ntotal} dense vectors, "
-            f"{len(self.bm25)} BM25 documents"
+            f"{len(self.bm25)} BM25 documents, built {self.built_at}"
         )
+
+    @property
+    def built_at(self) -> str:
+        return self.faiss_metadata.get('built_at', '')
 
     @property
     def documents(self):

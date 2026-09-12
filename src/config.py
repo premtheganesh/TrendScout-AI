@@ -41,6 +41,7 @@ class Settings(BaseSettings):
 
     # --- Models ---
     embedding_model: str = 'intfloat/e5-base-v2'
+    spacy_model: str = 'en_core_web_trf'   # what the corpus's entities were built with
     groq_api_key: Optional[str] = None
     groq_model: str = 'openai/gpt-oss-120b'
 

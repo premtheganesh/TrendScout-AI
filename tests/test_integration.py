@@ -100,8 +100,19 @@ class TestCorpusIntegrity:
         assert missing == 0, f'{missing} documents lack embeddings'
 
     def test_embeddings_are_the_right_width(self, mongo):
+        from src.corpus.embeddings import from_stored
         doc = mongo.db[COLLECTION].find_one({'embedding': {'$exists': True}})
-        assert len(doc['embedding']) == 768
+        assert from_stored(doc['embedding']).shape == (768,)
+
+    def test_embeddings_are_stored_as_binary(self, mongo):
+        """Lists of doubles are 3x the size; the migration converted them."""
+        legacy = mongo.db[COLLECTION].count_documents({'embedding': {'$type': 'array'}})
+        assert legacy == 0
+
+    def test_every_embedding_is_current(self, mongo):
+        stale = mongo.db[COLLECTION].count_documents(
+            {'$expr': {'$ne': ['$embedding_hash', '$content_hash']}})
+        assert stale == 0, f'{stale} documents have embeddings from older text'
 
     def test_entities_were_extracted_for_every_document(self, mongo):
         """Every document was processed; a few with one-word descriptions

@@ -55,7 +55,11 @@ class BM25Index:
         corpus_tokens: List[List[str]] = []
         self.doc_ids, self.types, self.titles = [], [], []
 
-        for doc in mongo.db[COLLECTION].find():
+        # Accept a client with .db or a Database itself. (getattr would be
+        # wrong: pymongo resolves `database.db` to a collection named 'db'.)
+        from pymongo.database import Database
+        db = mongo if isinstance(mongo, Database) else mongo.db
+        for doc in db[COLLECTION].find():
             doc_type = doc.get('type', '')
             text = document_text(doc, doc_type)
             if not text.strip():
