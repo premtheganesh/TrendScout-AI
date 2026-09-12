@@ -1,0 +1,13 @@
+{"hits": [
+  {"id": 114670, "title": "Specific Labs", "tagline": "AI agents for enterprise procurement",
+   "slug": "abc-specific-labs", "created_at": "2026-09-10T19:30:05.764Z", "total_vote_count": 12,
+   "search_path": "https://www.ycombinator.com/launches/abc-specific-labs",
+   "company": {"id": 31009, "name": "Specific Labs", "url": "https://withspecific.com", "slug": "specific-labs",
+               "tags": ["Generative AI", "SaaS", "B2B"], "batch": "Fall 2025", "industry": "B2B"}},
+  {"id": 114671, "title": "Bakery POS", "tagline": "Point of sale for bakeries",
+   "slug": "def-bakery-pos", "created_at": "2026-09-09T10:00:00.000Z", "total_vote_count": 3,
+   "search_path": "https://www.ycombinator.com/launches/def-bakery-pos",
+   "company": {"id": 31010, "name": "Bakery POS", "url": "", "slug": "bakery-pos",
+               "tags": ["Retail"], "batch": "Fall 2025", "industry": "Consumer"}},
+  {"id": 114672, "title": "", "tagline": "nameless", "company": {}}
+], "nbHits": 3, "page": 0, "nbPages": 1, "hitsPerPage": 20}

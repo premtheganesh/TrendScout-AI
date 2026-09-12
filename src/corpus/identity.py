@@ -83,6 +83,26 @@ def doc_key(doc: Dict, doc_type: str) -> str:
             raise ValueError('repo has no full_name to key on')
         return f'repo:gh:{full_name}'
 
+    if doc_type == 'launch':
+        platform = (doc.get('platform') or '').lower()
+        if platform == 'yc' and doc.get('yc_launch_id') is not None:
+            return f'launch:yc:{doc["yc_launch_id"]}'
+        if platform == 'hn' and doc.get('hn_id'):
+            return f'launch:hn:{doc["hn_id"]}'
+        raise ValueError('launch has no platform id to key on')
+
+    if doc_type == 'model':
+        hf_id = (doc.get('hf_id') or '').strip().lower()
+        if not hf_id:
+            raise ValueError('model has no hf_id to key on')
+        return f'model:hf:{hf_id}'
+
+    if doc_type == 'paper':
+        arxiv_id = (doc.get('arxiv_id') or '').strip().lower()
+        if not arxiv_id:
+            raise ValueError('paper has no arxiv_id to key on')
+        return f'paper:arxiv:{arxiv_id}'
+
     raise ValueError(f'no doc_key rule for type {doc_type!r}')
 
 

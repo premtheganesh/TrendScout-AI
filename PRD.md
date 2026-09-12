@@ -3,7 +3,7 @@
 Living document. Updated at the end of every phase with what was built,
 what changed from the plan, and the measured numbers.
 
-Last updated: 2026-09-12 (Phase 4)
+Last updated: 2026-09-12 (Phase 5)
 
 ---
 
@@ -177,7 +177,7 @@ this file.
 | 2 | Unified `documents` collection | ✅ done 2026-09-12 |
 | 3 | Ingestion framework + first 3 sources | ✅ done 2026-09-12 |
 | 4 | Incremental processing + scheduling | ✅ done 2026-09-12 |
-| 5 | Remaining sources | ⬜ |
+| 5 | Remaining sources | ✅ done 2026-09-12 |
 | 6 | Time-aware retrieval + API hardening | ⬜ |
 | 7 | Weekly digest | ⬜ |
 | 8 | Companies + funding | ⬜ |
@@ -337,3 +337,26 @@ Deviations from plan:
 - The entity extractor had always defaulted to `en_core_web_trf`, not the `en_core_web_sm` the docs claimed; config now says `trf` explicitly and the README download line is corrected.
 - `update.sh` treats any non-2xx from `/admin/reload` as "not reloaded" (a first version printed "reloaded" on a 404).
 - Neo4j stage still unverified live — Neo4j Desktop's database was not started. Two stale copies of the user's own API were found listening on port 8000 (PIDs 41269, 52952, one on old code); left running, user to restart.
+
+### Phase 5 — Remaining sources (2026-09-12)
+
+Planned:
+- [x] Three new document types in the registry — `launch`, `model`, `paper` — each needing exactly one registry entry, one `document_text` branch, key/date rules and a Neo4j field list; the planner prompt, `/stats`, `/meta` and the pipeline picked them up with no further changes
+- [x] `yc_launches` (unofficial JSON, AI-ish only), `hn_launches` (Show HN ≥10 points + AI title, every Launch HN by title prefix; company and batch parsed from "Launch HN: Foo (YC W26) – tagline")
+- [x] `crunchbase_news`, `eu_startups` as RSS config rows; `google_news` as an aggregator subclass that strips the " - Publisher" suffix and skips stories already held from their original outlet (`Source.is_duplicate` hook)
+- [x] `hf_models` (trending top 50, packaging tags stripped), `hf_papers` (daily papers with linked GitHub repo and stars)
+- [x] `startupsavant` wrapped as a monthly Playwright source; `src/scrapers/` deleted; `mongo_client.py` trimmed to connection only
+- [x] Metric snapshots extended: likes/downloads/trending for models, points/comments for launches, upvotes/repo stars for papers
+- [x] Fixtures + offline tests for every source; 238 passed
+
+Measured:
+- Corpus **2,452 → 3,898**: 1,535 startups, 774 articles, 482 repos, 261 launches (209 YC, 52 HN), 50 models, 796 papers. 10,851 entities, 1,640 linking.
+- Every new source ingested and re-ran idempotently (`new=0`); Google News skipped 1 story as a cross-source duplicate; StartupSavant's 2026 list is 82 new companies + 18 matching last year's by key.
+- Frozen corpus unchanged: 0.882. Live corpus with the 2025 labels: 0.558 (labels aging as expected; re-labelling tracked for Phase 6).
+- Chat routes correctly: "launched on Hacker News" → `launch`, "papers with code" → `paper`, "models on Hugging Face" → `model`, all with cited answers.
+
+Deviations from plan:
+- **Bug found by a test:** the AI filter matched substrings, so "Ret**ai**l" and "Supply Ch**ai**n" counted as AI. Fixed with whole-word matching; 44 mis-included YC companies pruned from the corpus.
+- Papers were too many (1,193 in 8 weeks, half the size of the startup set). `hf_papers` now requires ≥10 upvotes (the community's own filter; the daily window re-fetches, so late risers still get in); 397 pruned, 796 kept.
+- HN's Algolia results are capped at 5 pages (1,000 Show HN posts) per run — enough for the 7-day daily window, not for deep backfills.
+- Observation for Phase 6: volatile metrics (likes, downloads, stars, points) are kept out of the indexed text by design, so the answer model cannot rank "most popular" — the RAG context should append them as display-only extras.

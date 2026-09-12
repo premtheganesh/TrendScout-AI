@@ -1,0 +1,12 @@
+[
+  {"objectID": "45001", "title": "Show HN: Volt – an open-source LLM gateway", "url": "https://volt.dev",
+   "points": 142, "num_comments": 37, "author": "alice", "created_at": "2026-09-10T12:00:00Z",
+   "created_at_i": 1789041600, "story_text": "<p>We built <b>Volt</b> to route requests across providers.</p>", "_kind": "Show HN"},
+  {"objectID": "45002", "title": "Show HN: My AI note taker", "url": "https://notes.example",
+   "points": 4, "num_comments": 0, "author": "bob", "created_at": "2026-09-10T13:00:00Z", "_kind": "Show HN"},
+  {"objectID": "45003", "title": "Show HN: A faster way to fold laundry", "url": "https://laundry.example",
+   "points": 90, "num_comments": 20, "author": "carol", "created_at": "2026-09-10T14:00:00Z", "_kind": "Show HN"},
+  {"objectID": "45004", "title": "Launch HN: Corvera (YC W26) – Context layer for brand AI agents",
+   "url": "", "points": 55, "num_comments": 12, "author": "dave", "created_at": "2026-09-11T15:00:00Z",
+   "story_text": "Hi HN, we are Corvera.", "_kind": "Launch HN"}
+]

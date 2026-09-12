@@ -16,6 +16,9 @@ SNAPSHOTS = 'metric_snapshots'
 
 METRICS = {
     'repo': ('stars', 'forks', 'watchers', 'open_issues'),
+    'model': ('likes', 'downloads', 'trending_score'),
+    'launch': ('points', 'num_comments'),
+    'paper': ('upvotes', 'github_stars'),
 }
 
 
@@ -42,5 +45,6 @@ def capture(db, today: Optional[date] = None) -> Dict[str, int]:
                 upsert=True,
             )
             n += 1
-        counts[doc_type] = n
+        if n:
+            counts[doc_type] = n
     return counts

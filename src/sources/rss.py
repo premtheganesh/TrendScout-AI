@@ -12,6 +12,7 @@ import feedparser
 from bs4 import BeautifulSoup
 
 from src.corpus.dates import parse_datetime
+from src.corpus.identity import name_key
 from src.search.document_text import normalize_whitespace
 from src.sources import http
 from src.sources.base import Source
@@ -79,6 +80,7 @@ class RSSSource(Source):
 
         return {
             'title': title,
+            'title_key': name_key(title),
             'article_url': link,
             'published_date': self.entry_date(raw) or '',
             'description': strip_html(summary),

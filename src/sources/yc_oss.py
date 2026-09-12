@@ -26,11 +26,15 @@ AI_TERMS = ('ai', 'artificial intelligence', 'machine learning', 'generative ai'
 _YEAR = re.compile(r'(20\d\d)')
 
 
+_AI_TERM_RE = re.compile(r'\b(' + '|'.join(re.escape(t) for t in AI_TERMS) + r')\b', re.IGNORECASE)
+
+
 def looks_ai(company: Dict[str, Any]) -> bool:
-    blobs = [t.lower() for t in (company.get('tags') or [])]
-    blobs += [(company.get('industry') or '').lower(),
-              (company.get('subindustry') or '').lower()]
-    return any(any(term == b or term in b for term in AI_TERMS) for b in blobs if b)
+    """Whole-word match on tags and industries. Substring matching is a
+    trap here: "Retail", "Airlines" and "Training" all contain "ai"."""
+    blobs = list(company.get('tags') or [])
+    blobs += [company.get('industry') or '', company.get('subindustry') or '']
+    return any(_AI_TERM_RE.search(b) for b in blobs if isinstance(b, str) and b)
 
 
 def batch_year(batch: Optional[str]) -> Optional[int]:

@@ -1,0 +1,10 @@
+[
+  {"title": "NCP-ArchPreview Technical Report", "publishedAt": "2026-09-08T20:00:00.000Z", "numComments": "2",
+   "summary": "We introduce NCP-ArchPreview, a latent-space language model.",
+   "paper": {"id": "2609.10715", "publishedAt": "2026-09-09T00:00:00.000Z", "submittedOnDailyAt": "2026-09-11T00:00:00.000Z",
+             "title": "NCP-ArchPreview Technical Report", "summary": "We introduce NCP-ArchPreview, a latent-space language model.",
+             "upvotes": 231, "ai_summary": "A latent-space language model that jointly trains next-token and next-concept prediction.",
+             "ai_keywords": ["latent-space language model", "next-token prediction"],
+             "authors": [{"name": "NCP Team"}, {"name": "Jiaqi Cao"}], "githubRepo": "https://github.com/ncp/ncp", "githubStars": 410}},
+  {"title": "No id", "paper": {"title": "No id"}}
+]

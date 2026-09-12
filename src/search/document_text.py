@@ -100,6 +100,56 @@ def document_text(doc: Dict, doc_type: str = None) -> str:
         # weekly, and content_hash over this text decides what gets
         # re-embedded. The number is stored on the document for display.
 
+    elif doc_type == 'launch':
+        parts.append(_clean(doc.get('title')))
+        parts.append(_clean(doc.get('description')))
+        company = _clean(doc.get('company_name'))
+        batch = _clean(doc.get('yc_batch'))
+        if company and batch:
+            parts.append(f"Launched by {company} (YC {batch})")
+        elif company:
+            parts.append(f"Launched by {company}")
+        tags = _coerce_list(doc.get('tags'))
+        if tags:
+            parts.append(f"Topics: {', '.join(tags)}")
+        platform = _clean(doc.get('platform'))
+        kind = _clean(doc.get('kind'))
+        if platform == 'hn':
+            parts.append(f"Posted on Hacker News as {kind or 'Show HN'}")
+        elif platform == 'yc':
+            parts.append("Posted on Y Combinator Launches")
+
+    elif doc_type == 'model':
+        parts.append(_clean(doc.get('hf_id')) or _clean(doc.get('name')))
+        organization = _clean(doc.get('organization'))
+        if organization:
+            parts.append(f"Published by {organization} on Hugging Face")
+        task = _clean(doc.get('pipeline_tag'))
+        if task:
+            parts.append(f"Task: {task.replace('-', ' ')}")
+        library = _clean(doc.get('library_name'))
+        if library:
+            parts.append(f"Library: {library}")
+        tags = _coerce_list(doc.get('tags'))
+        if tags:
+            parts.append(f"Tags: {', '.join(tags[:12])}")
+
+    elif doc_type == 'paper':
+        parts.append(_clean(doc.get('title')))
+        parts.append(_clean(doc.get('summary')))
+        keywords = _coerce_list(doc.get('keywords'))
+        if keywords:
+            parts.append(f"Keywords: {', '.join(keywords)}")
+        authors = _coerce_list(doc.get('authors'))
+        if authors:
+            parts.append(f"Authors: {', '.join(authors[:5])}")
+        organization = _clean(doc.get('organization'))
+        if organization:
+            parts.append(f"Organization: {organization}")
+        repo = _clean(doc.get('github_repo'))
+        if repo:
+            parts.append(f"Code: {repo}")
+
     else:
         for field in ('name', 'title', 'full_name', 'description', 'summary'):
             parts.append(_clean(doc.get(field)))
@@ -117,6 +167,12 @@ def document_title(doc: Dict, doc_type: str = None) -> str:
         return (_clean(doc.get('full_name'))
                 or _clean(doc.get('name'))
                 or 'Untitled repository')
+    if doc_type == 'launch':
+        return _clean(doc.get('title')) or 'Untitled launch'
+    if doc_type == 'model':
+        return _clean(doc.get('hf_id')) or _clean(doc.get('name')) or 'Untitled model'
+    if doc_type == 'paper':
+        return _clean(doc.get('title')) or 'Untitled paper'
     return (_clean(doc.get('name'))
             or _clean(doc.get('title'))
             or 'Untitled')

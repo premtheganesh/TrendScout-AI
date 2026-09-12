@@ -55,6 +55,9 @@ def run_source(source: Source, db, since: Optional[datetime] = None,
                 record['errors'] += 1
                 logger.warning(f"{source.name}: no identity: {e}")
                 continue
+            if source.is_duplicate(doc, db):
+                record['skipped'] += 1
+                continue
             if dry_run:
                 record['new'] += 1
                 continue

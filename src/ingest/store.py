@@ -20,7 +20,9 @@ from src.corpus.types import COLLECTION
 # Updated on every run even when the text has not changed: they are the
 # time series the trends feature reads.
 VOLATILE_FIELDS = ('stars', 'forks', 'watchers', 'open_issues', 'updated_at',
-                   'pushed_at', 'team_size', 'status', 'is_hiring')
+                   'pushed_at', 'team_size', 'status', 'is_hiring',
+                   'likes', 'downloads', 'trending_score', 'points', 'num_comments',
+                   'upvotes', 'github_stars')
 
 # Never overwritten by a re-ingest.
 PROTECTED_FIELDS = ('_id', 'first_seen_at', 'entities', 'entities_extracted_at',

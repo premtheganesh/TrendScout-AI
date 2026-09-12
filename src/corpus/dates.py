@@ -53,6 +53,12 @@ def event_at_for(doc: Dict, doc_type: str) -> Optional[datetime]:
         return parse_datetime(doc.get('created_at'))
     if doc_type == 'startup':
         return parse_datetime(doc.get('launched_at'))
+    if doc_type == 'launch':
+        return parse_datetime(doc.get('launched_at'))
+    if doc_type == 'model':
+        return parse_datetime(doc.get('created_at'))
+    if doc_type == 'paper':
+        return parse_datetime(doc.get('published_at'))
     return parse_datetime(doc.get('event_at'))
 
 

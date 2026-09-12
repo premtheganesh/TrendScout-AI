@@ -97,3 +97,28 @@ class TestTypeResolution:
         doc = {**sample_repo, 'type': 'repo'}
         assert document_text(doc) == document_text(sample_repo, 'repo')
         assert document_title(doc) == 'langchain-ai/langchain'
+
+
+class TestNewTypes:
+    def test_launch_text_names_company_batch_and_platform(self):
+        doc = {'title': 'Corvera: Context layer', 'description': 'Deploy agents.',
+               'company_name': 'Corvera', 'yc_batch': 'W26', 'platform': 'hn', 'kind': 'Launch HN',
+               'tags': ['AI']}
+        text = document_text(doc, 'launch')
+        assert 'Launched by Corvera (YC W26)' in text and 'Launch HN' in text
+        assert document_title(doc, 'launch') == 'Corvera: Context layer'
+
+    def test_model_text(self):
+        doc = {'hf_id': 'deepseek-ai/DeepSeek-V4', 'organization': 'deepseek-ai',
+               'pipeline_tag': 'text-generation', 'library_name': 'transformers', 'tags': ['fp8'],
+               'url': 'https://huggingface.co/deepseek-ai/DeepSeek-V4', 'likes': 5}
+        text = document_text(doc, 'model')
+        assert 'deepseek-ai/DeepSeek-V4' in text and 'Task: text generation' in text
+        assert '5' not in text                       # likes are volatile, not indexed
+        assert document_url(doc, 'model').endswith('DeepSeek-V4')
+
+    def test_paper_text(self):
+        doc = {'title': 'NCP', 'summary': 'A model.', 'keywords': ['latent'], 'authors': ['A', 'B'],
+               'organization': 'Lab', 'github_repo': 'https://github.com/x/y'}
+        text = document_text(doc, 'paper')
+        assert 'Keywords: latent' in text and 'Authors: A, B' in text and 'Code: https://github.com/x/y' in text

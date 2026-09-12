@@ -16,6 +16,9 @@ NODE_FIELDS = {
     'startup': ('name', 'description', 'location', 'funding', 'source', 'link', 'yc_batch'),
     'article': ('title', 'description', 'author', 'published_date', 'source', 'article_url'),
     'repo': ('full_name', 'description', 'stars', 'forks', 'primary_language', 'source', 'html_url'),
+    'launch': ('title', 'description', 'company_name', 'yc_batch', 'platform', 'kind', 'points', 'url'),
+    'model': ('hf_id', 'organization', 'pipeline_tag', 'library_name', 'likes', 'downloads', 'url'),
+    'paper': ('title', 'organization', 'upvotes', 'github_repo', 'arxiv_id', 'url'),
 }
 
 

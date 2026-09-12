@@ -230,7 +230,7 @@ elif page == "Search":
     with col2:
         doc_type = st.selectbox(
             "Type",
-            ["All", "startup", "article", "repo"],
+            ["All", "startup", "article", "repo", "launch", "model", "paper"],
         )
 
     with st.expander("Advanced options"):

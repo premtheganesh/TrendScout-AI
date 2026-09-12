@@ -1,0 +1,6 @@
+[
+  {"id": "deepseek-ai/DeepSeek-V4.1-Flash", "likes": 1997, "trendingScore": 1830, "downloads": 140636,
+   "tags": ["transformers", "safetensors", "deepseek_v41", "text-generation", "license:mit", "region:us", "fp8"],
+   "pipeline_tag": "image-text-to-text", "library_name": "transformers", "createdAt": "2026-09-10T02:17:58.000Z"},
+  {"id": "", "likes": 1}
+]

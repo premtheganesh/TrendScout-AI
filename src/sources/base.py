@@ -38,5 +38,11 @@ class Source(ABC):
         Must not include `type`, `source`, `doc_key`, `content_hash` or the
         seen timestamps — the runner owns those."""
 
+    def is_duplicate(self, doc: Dict[str, Any], db) -> bool:
+        """Cross-source duplicate check, after identity is attached. The
+        default trusts doc_key alone; aggregators that relay other outlets'
+        stories override this."""
+        return False
+
     def __repr__(self) -> str:
         return f"<Source {self.name} type={self.doc_type} schedule={self.schedule}>"

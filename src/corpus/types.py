@@ -39,6 +39,18 @@ DOC_TYPES: Dict[str, DocType] = {t.name: t for t in (
         planner_hint='open-source repositories (name, description, language, topics, stars)',
         legacy_collection='github_repos',
     ),
+    DocType(
+        name='launch', label='Product launch', neo4j_label='Launch',
+        planner_hint='product launches from Y Combinator Launches and Hacker News Show HN / Launch HN (title, tagline, company, YC batch, points)',
+    ),
+    DocType(
+        name='model', label='Hugging Face model', neo4j_label='Model',
+        planner_hint='trending Hugging Face models (model id, organisation, task, library, tags, likes, downloads)',
+    ),
+    DocType(
+        name='paper', label='Research paper', neo4j_label='Paper',
+        planner_hint='AI research papers from Hugging Face daily papers (title, summary, keywords, authors, code repository)',
+    ),
 )}
 
 TYPE_NAMES: Tuple[str, ...] = tuple(DOC_TYPES)

@@ -180,11 +180,19 @@ source runs in isolation and writes one row to the `runs` collection
 (counts, duration, status, error), so one broken feed never blocks the
 others.
 
-| Source | Type | What |
-| --- | --- | --- |
-| `yc_oss` | startup | Y Combinator directory via the yc-oss JSON mirror, AI-tagged companies from 2023+ batches |
-| `techcrunch_ai` | article | TechCrunch AI category feed, paged |
-| `github_new` | repo | Repositories created in the window for `llm`, `generative-ai`, `ai-agents`, `rag`; top 60 by stars, awesome-lists skipped |
+| Source | Type | Schedule | What |
+| --- | --- | --- | --- |
+| `yc_oss` | startup | weekly | Y Combinator directory via the yc-oss JSON mirror; AI-tagged companies from 2023+ batches |
+| `startupsavant` | startup | monthly | StartupSavant's yearly "startups to watch" list (headless browser; local only) |
+| `yc_launches` | launch | weekly | Y Combinator Launches, AI-ish only |
+| `hn_launches` | launch | daily | Hacker News: Show HN with ≥10 points and an AI title, and every Launch HN |
+| `techcrunch_ai` | article | daily | TechCrunch AI category feed, paged |
+| `crunchbase_news` | article | daily | Crunchbase News feed (funding rounds) |
+| `eu_startups` | article | daily | EU-Startups feed (European rounds) |
+| `google_news` | article | daily | Google News search for AI startup funding; stories already held from their original outlet are skipped by title |
+| `github_new` | repo | weekly | Repositories created in the window for `llm`, `generative-ai`, `ai-agents`, `rag`; top 60 by stars, awesome-lists skipped |
+| `hf_models` | model | weekly | Hugging Face trending models (top 50) |
+| `hf_papers` | paper | daily | Hugging Face daily papers, with the GitHub repo each links to |
 
 ### Reproducing the evaluation
 
@@ -232,20 +240,23 @@ Every document lives in one MongoDB collection, `documents`, tagged with a
 which types exist; adding one means adding an entry there plus a rendering
 branch in `document_text.py`.
 
-| `type`    | Documents | Source                      |
-| --------- | --------- | --------------------------- |
-| `startup` | 140       | StartupSavant, Y Combinator |
-| `article` | 20        | TechCrunch RSS              |
-| `repo`    | 50        | GitHub API                  |
-| **total** | **210**   | 647 canonical entities      |
+| `type`    | What                                              |
+| --------- | ------------------------------------------------- |
+| `startup` | a company (Y Combinator, StartupSavant)           |
+| `article` | a news story (TechCrunch, Crunchbase News, EU-Startups, Google News) |
+| `repo`    | a GitHub repository                               |
+| `launch`  | a product launch (YC Launches, Show HN, Launch HN) |
+| `model`   | a trending Hugging Face model                     |
+| `paper`   | a Hugging Face daily paper                        |
+
+`GET /meta` reports live counts per type. The evaluation numbers above
+were measured on the frozen 210-document snapshot, not the live corpus.
 
 Each document carries a stable `doc_key` (unique index — re-ingesting the
 same thing updates rather than duplicates), `event_at` (when the thing
 happened, a real datetime, or null when the source gives none), `first_seen_at`
 / `last_seen_at`, and `content_hash` over exactly the text that gets indexed.
 
-83 entities appear in more than one document; those create the graph edges.
-In Neo4j: 857 nodes, 1,013 MENTIONS relationships.
 
 ## Layout
 
@@ -258,7 +269,8 @@ src/
   sources/
     base.py               Source: fetch(since) + normalize(raw)
     rss.py                generic RSS/Atom source (one class, many feeds)
-    yc_oss.py, github.py  the other sources
+    yc_oss.py, yc_launches.py, hn.py, github.py, huggingface.py,
+    google_news.py, startupsavant.py
     registry.py           every configured source
   ingest/
     store.py              upsert by doc_key: new / changed / unchanged

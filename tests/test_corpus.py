@@ -19,6 +19,9 @@ class TestRegistry:
         assert LEGACY_COLLECTIONS == {'startups': 'startup', 'articles': 'article',
                                       'github_repos': 'repo'}
 
+    def test_six_types_are_registered(self):
+        assert TYPE_NAMES == ('startup', 'article', 'repo', 'launch', 'model', 'paper')
+
     def test_normalize_type_accepts_both_spellings(self):
         assert normalize_type('repo') == 'repo'
         assert normalize_type('github_repos') == 'repo'
@@ -77,6 +80,14 @@ class TestDocKey:
     def test_repo_uses_full_name_lowercased(self):
         assert doc_key({'full_name': 'LangChain-AI/LangChain'}, 'repo') == 'repo:gh:langchain-ai/langchain'
 
+    def test_new_type_keys(self):
+        assert doc_key({'platform': 'yc', 'yc_launch_id': 7}, 'launch') == 'launch:yc:7'
+        assert doc_key({'platform': 'hn', 'hn_id': '99'}, 'launch') == 'launch:hn:99'
+        assert doc_key({'hf_id': 'Org/Model'}, 'model') == 'model:hf:org/model'
+        assert doc_key({'arxiv_id': '2609.10715'}, 'paper') == 'paper:arxiv:2609.10715'
+        with pytest.raises(ValueError):
+            doc_key({'platform': 'yc'}, 'launch')
+
     def test_missing_identity_raises(self):
         with pytest.raises(ValueError):
             doc_key({}, 'repo')
@@ -110,6 +121,9 @@ class TestDates:
         assert event_at_for({'published_date': 'Thu, 13 Nov 2025 15:02:11 +0000'}, 'article').year == 2025
         assert event_at_for({'created_at': '2023-01-05T00:00:00Z'}, 'repo').year == 2023
         assert event_at_for({'name': 'no date'}, 'startup') is None
+        assert event_at_for({'launched_at': 1704067200}, 'launch').year == 2024
+        assert event_at_for({'created_at': '2026-09-10T02:17:58.000Z'}, 'model').day == 10
+        assert event_at_for({'published_at': '2026-09-09T00:00:00.000Z'}, 'paper').day == 9
 
     def test_event_at_never_falls_back_to_first_seen(self):
         doc = {'name': 'Old Co', 'scraped_at': '2025-11-13T01:19:25', 'inserted_at': '2025-11-13T01:19:25'}
