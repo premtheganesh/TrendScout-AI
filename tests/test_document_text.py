@@ -1,6 +1,7 @@
 """Document to text conversion."""
 
 from src.search.document_text import (
+    document_context,
     document_text, document_title, document_url, _coerce_list, _clean
 )
 
@@ -122,3 +123,16 @@ class TestNewTypes:
                'organization': 'Lab', 'github_repo': 'https://github.com/x/y'}
         text = document_text(doc, 'paper')
         assert 'Keywords: latent' in text and 'Authors: A, B' in text and 'Code: https://github.com/x/y' in text
+
+
+class TestDocumentContext:
+    def test_appends_metrics_without_indexing_them(self, sample_repo):
+        doc = {**sample_repo, 'stars': 1200, 'forks': 30}
+        assert '1200' not in document_text(doc, 'repo')
+        context = document_context(doc, 'repo')
+        assert context.startswith(document_text(doc, 'repo'))
+        assert 'GitHub stars: 1200' in context and 'Forks: 30' in context
+
+    def test_no_extras_means_plain_text(self):
+        doc = {'name': 'X', 'description': 'plain'}
+        assert document_context(doc, 'startup') == document_text(doc, 'startup')

@@ -3,17 +3,21 @@
 import re
 import logging
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any
 
 from src.corpus.types import DOC_TYPES, TYPE_NAMES, label_for, normalize_type
 from src.llm.groq_client import GroqClient
-from src.search.document_text import document_text, document_title, document_url
+from src.search.document_text import document_context, document_title, document_url
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONTEXT_SIZE = 8
 
 MAX_CHARS_PER_DOC = 900
+
+MAX_SINCE_DAYS = 365
+WIDEN_FACTOR = 4          # "last 7 days" -> "last 28 days" when nothing matches
 
 # gpt-oss models intermittently emit CJK bracket citations (【1】) instead of
 # ASCII ones. The UI linkifies [n], so normalise before returning.
@@ -66,7 +70,19 @@ def json_quote(value: str) -> str:
     return f'"{value}"'
 
 
+def clamp_since_days(value) -> Optional[int]:
+    """A positive number of days up to a year, or None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and value > 0:
+        return int(min(value, MAX_SINCE_DAYS))
+    if isinstance(value, str) and value.strip().isdigit() and int(value) > 0:
+        return int(min(int(value), MAX_SINCE_DAYS))
+    return None
+
+
 PLANNER_PROMPT = """Analyse this question and produce a retrieval plan.
+Today is {today}.
 
 {context_block}Available document types:
 {type_catalogue}
@@ -89,24 +105,34 @@ Return JSON with exactly these keys:
                              thing, otherwise null.
   "location":     string or null - a city, state or country if the question
                              filters by place, otherwise null.
+  "since_days":   integer or null - a time window in days when the question
+                             asks about a period: "this week" / "recently"
+                             -> 7, "this month" / "latest" -> 30, "this
+                             year" -> 365. null when no period is implied.
 }}
 
 Examples:
 Question: "What open source RAG frameworks are there?"
-{{"search_query": "open source retrieval augmented generation framework", "type": "repo", "location": null}}
+{{"search_query": "open source retrieval augmented generation framework", "type": "repo", "location": null, "since_days": null}}
 
 Question: "Which AI startups in San Francisco raised Series B?"
-{{"search_query": "AI startup Series B funding", "type": "startup", "location": "San Francisco"}}
+{{"search_query": "AI startup Series B funding", "type": "startup", "location": "San Francisco", "since_days": null}}
 
 Question: "What's the latest news on AI coding tools?"
-{{"search_query": "AI coding tools developer", "type": "article", "location": null}}
+{{"search_query": "AI coding tools developer", "type": "article", "location": null, "since_days": 30}}
+
+Question: "Which AI startups launched this week?"
+{{"search_query": "AI startup launch", "type": "launch", "location": null, "since_days": 7}}
+
+Question: "What funding rounds were announced last month?"
+{{"search_query": "AI startup raises funding round", "type": "article", "location": null, "since_days": 30}}
 
 Question: "Tell me about Suno"
-{{"search_query": "Suno AI music generation", "type": null, "location": null}}
+{{"search_query": "Suno AI music generation", "type": null, "location": null, "since_days": null}}
 
 With earlier conversation mentioning Suno in Cambridge, Massachusetts:
 Question: "who else is in that city?"
-{{"search_query": "AI startup Cambridge Massachusetts", "type": "startup", "location": "Cambridge"}}
+{{"search_query": "AI startup Cambridge Massachusetts", "type": "startup", "location": "Cambridge", "since_days": null}}
 
 Now this question:
 Question: "{question}"
@@ -182,6 +208,7 @@ class RAGPipeline:
             'search_query': question,
             'type': None,
             'location': None,
+            'since_days': None,
         }
 
         if not self.llm_available:
@@ -202,6 +229,7 @@ class RAGPipeline:
                     question=question,
                     context_block=context_block,
                     type_catalogue=_type_catalogue(),
+                    today=self.today().isoformat(),
                 ),
                 system_prompt=PLANNER_SYSTEM_PROMPT,
                 temperature=0.0,
@@ -226,33 +254,65 @@ class RAGPipeline:
             'search_query': search_query.strip(),
             'type': doc_type,
             'location': location,
+            'since_days': clamp_since_days(plan.get('since_days')),
         }
 
+    def today(self):
+        return datetime.now(timezone.utc).date()
+
     # Stage 2 — retrieve
-    def retrieve(self, plan: Dict[str, Any], top_k: int) -> List[Dict]:
-        filters = None
-        if plan.get('location'):
+    def _filters(self, location: Optional[str], since_days: Optional[int]) -> Optional[Dict]:
+        filters = {}
+        if location:
             # Regex, since the corpus stores "Austin, Texas".
-            filters = {'location': {'$regex': plan['location'], '$options': 'i'}}
+            filters['location'] = {'$regex': location, '$options': 'i'}
+        if since_days:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
+            # Documents without a date never match a time window.
+            filters['event_at'] = {'$gte': cutoff}
+        return filters or None
 
-        results = self.search.search(
-            query=plan['search_query'],
-            doc_type=plan.get('type'),
-            filters=filters,
-            top_k=top_k,
-        )
+    def retrieve(self, plan: Dict[str, Any], top_k: int) -> List[Dict]:
+        """
+        Search with the plan's constraints, relaxing them in a fixed order
+        when nothing matches: drop the location first (it is the most
+        often over-specific), then widen the time window, and only then
+        drop the date. Every relaxation is recorded on the plan so the
+        answer and the UI can say what was actually searched. The date
+        constraint is never dropped silently: an empty result under
+        "last 7 days" must not quietly become an answer about 2024.
+        """
+        location = plan.get('location')
+        since_days = plan.get('since_days')
 
-        # A location filter that matches nothing should not produce an empty
-        # answer — retry unfiltered and let the model note the mismatch.
-        if not results and filters:
-            logger.info("Location filter matched nothing; retrying unfiltered")
+        ladder = [(location, since_days, None)]
+        if location:
+            ladder.append((None, since_days, 'dropped_location'))
+        if since_days:
+            widened = min(since_days * WIDEN_FACTOR, MAX_SINCE_DAYS)
+            if widened > since_days:
+                ladder.append((None, widened, f'widened_window_to_{widened}_days'))
+            ladder.append((None, None, 'dropped_date'))
+
+        plan['relaxations'] = []
+        for loc, days, relaxation in ladder:
+            if relaxation:
+                plan['relaxations'].append(relaxation)
+                logger.info(f"Nothing matched; relaxing: {relaxation}")
             results = self.search.search(
                 query=plan['search_query'],
                 doc_type=plan.get('type'),
+                filters=self._filters(loc, days),
                 top_k=top_k,
             )
+            if results:
+                plan['effective_location'] = loc
+                plan['effective_since_days'] = days
+                return results
 
-        return results
+        plan['effective_location'] = None
+        plan['effective_since_days'] = None
+        return []
 
     # Stage 3 — generate
     def build_context(self, results: List[Dict]) -> tuple:
@@ -263,7 +323,7 @@ class RAGPipeline:
             doc_type = result.get('type') or doc.get('type', '')
             title = result.get('title') or document_title(doc, doc_type)
             url = result.get('url') or document_url(doc, doc_type)
-            body = document_text(doc, doc_type)[:MAX_CHARS_PER_DOC]
+            body = document_context(doc, doc_type, max_chars=MAX_CHARS_PER_DOC)
 
             header = f"[{i}] {label_for(doc_type)}: {title}"
             block = [header, body]
@@ -285,11 +345,30 @@ class RAGPipeline:
 
         return '\n\n'.join(blocks), sources
 
+    def retrieval_note(self, plan: Dict[str, Any]) -> str:
+        """One line telling the model what window was actually searched."""
+        parts = [f"Today is {self.today().isoformat()}."]
+        asked = plan.get('since_days')
+        got = plan.get('effective_since_days')
+        if asked and got and got != asked:
+            parts.append(f"Nothing matched the last {asked} days, so the sources "
+                         f"cover the last {got} days; say so.")
+        elif asked and not got and plan.get('relaxations'):
+            parts.append(f"Nothing matched the last {asked} days; the sources are "
+                         "undated or older, so say the period is not covered.")
+        elif got:
+            parts.append(f"The sources are from the last {got} days.")
+        if plan.get('location') and not plan.get('effective_location') and plan.get('relaxations'):
+            parts.append(f"No source matched the location {plan['location']!r}; "
+                         "say so rather than implying these are there.")
+        return ' '.join(parts)
+
     def generate(
         self,
         question: str,
         context: str,
         history: Optional[List[Dict[str, str]]] = None,
+        plan: Optional[Dict[str, Any]] = None,
     ) -> str:
         if not self.llm_available:
             return ("Answer generation is unavailable because GROQ_API_KEY is not "
@@ -315,6 +394,8 @@ class RAGPipeline:
                     f"Earlier in this conversation:\n{transcript}\n")
 
         prompt_parts.append(f"Sources:\n\n{context}\n")
+        if plan:
+            prompt_parts.append(f"Retrieval note: {self.retrieval_note(plan)}\n")
         prompt_parts.append(f"Question: {question}")
         prompt_parts.append(
             "Answer using only the sources above, citing them as [n].")
@@ -347,11 +428,12 @@ class RAGPipeline:
         if use_planner:
             plan = self.plan_query(question, history=history)
         else:
-            plan = {'search_query': question, 'type': None, 'location': None}
+            plan = {'search_query': question, 'type': None, 'location': None,
+                    'since_days': None}
 
         results = self.retrieve(plan, top_k)
         context, sources = self.build_context(results)
-        answer_text = self.generate(question, context, history=history)
+        answer_text = self.generate(question, context, history=history, plan=plan)
 
         return RAGAnswer(
             question=question,

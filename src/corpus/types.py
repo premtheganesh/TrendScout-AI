@@ -26,12 +26,12 @@ class DocType:
 DOC_TYPES: Dict[str, DocType] = {t.name: t for t in (
     DocType(
         name='startup', label='Startup', neo4j_label='Startup',
-        planner_hint='AI startup companies (name, description, location, funding, investors)',
+        planner_hint='AI startup company profiles (name, description, location, YC batch, listed funding, investors) — not news',
         legacy_collection='startups',
     ),
     DocType(
         name='article', label='News article', neo4j_label='Article',
-        planner_hint='news articles (title, description, author, categories)',
+        planner_hint='news articles about AI startups — funding rounds, acquisitions, product news (title, description, publisher, date)',
         legacy_collection='articles',
     ),
     DocType(

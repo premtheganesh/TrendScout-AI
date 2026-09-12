@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # --- API server ---
     cors_origins: str = '*'          # comma-separated
     admin_token: Optional[str] = None
+    chat_rate_limit_per_minute: int = 20   # per client IP; protects the Groq quota
 
     @field_validator('index_dir')
     @classmethod

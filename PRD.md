@@ -3,7 +3,7 @@
 Living document. Updated at the end of every phase with what was built,
 what changed from the plan, and the measured numbers.
 
-Last updated: 2026-09-12 (Phase 5)
+Last updated: 2026-09-12 (Phase 6)
 
 ---
 
@@ -65,9 +65,9 @@ Known problems this project fixes:
   returns the same all-time-top repos every run; TechCrunch feed holds 20 items~~ (fixed in Phase 3).
 - ~~No pipeline runner or scheduler~~ (Phase 4); ~~no run log~~ (Phase 3); ~~Neo4j import blocks on `input()`~~ (Phase 2).
 - ~~API loads indexes once with no reload~~ (`/admin/reload`, Phase 4); ~~collection names hardcoded in ~15 files~~ (Phase 2).
-- `/graph/query` runs arbitrary Cypher unauthenticated; `/search` forwards a
+- ~~`/graph/query` runs arbitrary Cypher unauthenticated; `/search` forwards a
   raw MongoDB filter from the client; CORS is `*`; endpoints are `async def`
-  around blocking calls.
+  around blocking calls~~ (all fixed in Phase 6).
 - ~~Evaluation numbers are not reproducible from a fresh clone~~ — fixed in Phase 1.
 
 ## 6. Sources
@@ -178,7 +178,7 @@ this file.
 | 3 | Ingestion framework + first 3 sources | ✅ done 2026-09-12 |
 | 4 | Incremental processing + scheduling | ✅ done 2026-09-12 |
 | 5 | Remaining sources | ✅ done 2026-09-12 |
-| 6 | Time-aware retrieval + API hardening | ⬜ |
+| 6 | Time-aware retrieval + API hardening | ✅ done 2026-09-12 |
 | 7 | Weekly digest | ⬜ |
 | 8 | Companies + funding | ⬜ |
 | 9 | Trends | ⬜ |
@@ -360,3 +360,26 @@ Deviations from plan:
 - Papers were too many (1,193 in 8 weeks, half the size of the startup set). `hf_papers` now requires ≥10 upvotes (the community's own filter; the daily window re-fetches, so late risers still get in); 397 pruned, 796 kept.
 - HN's Algolia results are capped at 5 pages (1,000 Show HN posts) per run — enough for the 7-day daily window, not for deep backfills.
 - Observation for Phase 6: volatile metrics (likes, downloads, stars, points) are kept out of the indexed text by design, so the answer model cannot rank "most popular" — the RAG context should append them as display-only extras.
+
+### Phase 6 — Time-aware retrieval + API hardening (2026-09-12)
+
+Planned:
+- [x] Planner emits `since_days` (validated 1–365) and sees today's date; "this week" → 7, "last month" → 30
+- [x] `RAGPipeline.retrieve` relaxes in a fixed order — drop location → widen window ×4 → drop date — recording every step in `plan.relaxations` plus `effective_since_days` / `effective_location`; the answer prompt carries a retrieval note ("nothing matched the last 7 days, sources cover 28") so the prose says what was actually searched
+- [x] `document_context()`: the answer model sees the indexed text **plus** dates and volatile metrics (stars, likes, downloads, points, funding, batch, publisher) that the index deliberately leaves out — fixes the Phase 5 "can't rank by popularity" observation
+- [x] `/search`: raw `filters` dict replaced by typed `type` / `location` / `source` / `since_days`; unknown fields → 422; `top_k` ≤ 50, query ≤ 500 chars
+- [x] `GET /documents` (newest first by `event_at`, filter by type/source/window, paged) and `GET /documents/{id}`
+- [x] `/chat` caps (question ≤ 2000, history ≤ 20 turns, `top_k` ≤ 20) and a per-IP sliding-window rate limit (`CHAT_RATE_LIMIT_PER_MINUTE`, default 20)
+- [x] `/graph/query` behind the admin token and read-only (write clauses rejected before Neo4j); CORS origins from config, credentials only with named origins
+- [x] Every endpoint `def` instead of `async def` — one slow `/chat` no longer stalls the event loop
+- [x] Tests: 262 passed (+24), including `test_date_filter_is_not_dropped_on_retry`
+
+Acceptance (live, real LLM):
+- "Which AI startups launched this week?" → `type=launch, since_days=7`, six launches dated 2026-09-07..10, all cited
+- "AI startups in Antarctica … this week?" → `relaxations=['dropped_location']`, answer states the location is not covered
+- "Funding rounds in the last month?" → `type=article, since_days=30`; Harvey ($15.5B valuation), Cognition ($2B), Ollie ($7.5M), each dated within the window
+- `/search` with `{"filters": {"$where": …}}` → 422; `/documents?since_days=7` → 339 documents across all six types
+
+Deviations from plan:
+- Planner routing needed a wording fix: "funding rounds" first went to `startup` (YC profiles) instead of `article`; the type catalogue now distinguishes company profiles from news, with an example.
+- Re-labelling the 22-query evaluation set against the live corpus (noted in Phase 3) is deferred to the end of the roadmap: the frozen corpus already guards against regressions, and the corpus is still changing shape.

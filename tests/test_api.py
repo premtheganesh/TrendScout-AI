@@ -26,7 +26,7 @@ def stub_llm(client):
         model = 'stub'
         def generate_json(self, prompt, system_prompt=None, temperature=0.0):
             return {'search_query': 'AI music', 'type': 'startup',
-                    'location': None}
+                    'location': None, 'since_days': None}
         def generate(self, prompt, system_prompt=None, temperature=0.0,
                      max_tokens=2048, reasoning_effort=None):
             return 'Suno makes AI music [1].'
@@ -73,6 +73,27 @@ class TestSearchEndpoint:
     def test_unknown_type_is_rejected(self, client):
         response = client.post('/search', json={'query': 'x', 'type': 'podcasts'})
         assert response.status_code == 422
+
+    def test_raw_database_filters_are_rejected(self, client):
+        """The old API forwarded a client-supplied Mongo query verbatim."""
+        response = client.post('/search', json={
+            'query': 'x', 'filters': {'$where': 'sleep(1000)'}})
+        assert response.status_code == 422
+
+    def test_typed_filters_apply(self, client):
+        results = client.post('/search', json={
+            'query': 'AI', 'type': 'startup', 'location': 'San Francisco', 'top_k': 5}).json()
+        assert results
+        assert all('san francisco' in r['document']['location'].lower() for r in results)
+
+    def test_since_days_only_returns_dated_documents(self, client):
+        results = client.post('/search', json={
+            'query': 'AI', 'since_days': 365, 'top_k': 10}).json()
+        assert results
+        assert all(r['document'].get('event_at') for r in results)
+
+    def test_top_k_is_capped(self, client):
+        assert client.post('/search', json={'query': 'x', 'top_k': 500}).status_code == 422
 
     def test_channels_can_be_toggled(self, client):
         results = client.post('/search', json={
@@ -143,6 +164,50 @@ class TestChatEndpoint:
             'question': 'raw question here', 'use_planner': False}).json()
         assert payload['search_query'] == 'raw question here'
 
+    def test_plan_reports_relaxations(self, client, stub_llm):
+        plan = client.post('/chat', json={'question': 'anything'}).json()['plan']
+        assert 'relaxations' in plan and 'effective_since_days' in plan
+
+    def test_oversized_question_is_rejected(self, client, stub_llm):
+        assert client.post('/chat', json={'question': 'x' * 3000}).status_code == 422
+
+    def test_rate_limit(self, client, stub_llm):
+        from src.api import main
+        original = main.chat_limiter
+        main.chat_limiter = main.RateLimiter(per_minute=2)
+        try:
+            codes = [client.post('/chat', json={'question': 'q', 'use_planner': False}).status_code
+                     for _ in range(3)]
+            assert codes == [200, 200, 429]
+        finally:
+            main.chat_limiter = original
+
+
+class TestDocumentsEndpoint:
+    def test_lists_newest_first(self, client):
+        payload = client.get('/documents', params={'limit': 5}).json()
+        assert payload['count'] == 5 and payload['total'] > 5
+        dates = [d['event_at'] for d in payload['items']]
+        assert dates == sorted(dates, reverse=True)
+        assert all('embedding' not in d and 'entities' not in d for d in payload['items'])
+
+    def test_type_and_window_filters(self, client):
+        payload = client.get('/documents', params={'type': ['repo', 'paper'], 'since_days': 90}).json()
+        assert payload['items']
+        assert {d['type'] for d in payload['items']} <= {'repo', 'paper'}
+
+    def test_unknown_type_is_422(self, client):
+        assert client.get('/documents', params={'type': 'podcast'}).status_code == 422
+
+    def test_single_document(self, client):
+        first = client.get('/documents', params={'limit': 1}).json()['items'][0]
+        doc = client.get(f"/documents/{first['_id']}").json()
+        assert doc['_id'] == first['_id'] and 'entities' in doc and 'embedding' not in doc
+
+    def test_missing_or_malformed_id_is_404(self, client):
+        assert client.get('/documents/000000000000000000000000').status_code == 404
+        assert client.get('/documents/not-an-id').status_code == 404
+
 
 class TestOperationsEndpoints:
     def test_health(self, client):
@@ -195,11 +260,28 @@ class TestStatsEndpoint:
 
 
 class TestGraphEndpointsDegrade:
-    def test_graph_query_returns_503_when_neo4j_is_down(self, client):
+    @pytest.fixture
+    def admin(self, monkeypatch):
+        from src.config import get_settings
+        monkeypatch.setenv('ADMIN_TOKEN', 'graph-test-token')
+        get_settings.cache_clear()
+        yield {'Authorization': 'Bearer graph-test-token'}
+        get_settings.cache_clear()
+
+    def test_graph_query_requires_the_admin_token(self, client, admin):
+        response = client.post('/graph/query', json={'query': 'MATCH (n) RETURN n LIMIT 1'})
+        assert response.status_code == 401
+
+    def test_write_cypher_is_rejected_before_neo4j(self, client, admin):
+        response = client.post('/graph/query', headers=admin,
+                               json={'query': 'MATCH (n) DETACH DELETE n'})
+        assert response.status_code == 400
+
+    def test_graph_query_returns_503_when_neo4j_is_down(self, client, admin):
         from src.api import main
         if main.neo4j_client is not None and main.neo4j_client.available:
             pytest.skip('Neo4j is running — degradation path not exercised')
-        response = client.post('/graph/query',
+        response = client.post('/graph/query', headers=admin,
                                json={'query': 'MATCH (n) RETURN n LIMIT 1'})
         assert response.status_code == 503
         assert 'neo4j' in response.json()['detail'].lower()

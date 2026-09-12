@@ -9,13 +9,18 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from bson import ObjectId
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Dict, Optional, Any
 import logging
+import re
 
 from src.config import get_settings
 from src.corpus.types import COLLECTION, TYPE_NAMES
@@ -24,6 +29,7 @@ from src.search.hybrid_search import HybridSearchEngine
 from src.database.neo4j_client import Neo4jClient
 from src.embeddings.embedding_generator import EmbeddingGenerator
 from src.rag import RAGPipeline
+from src.rag.pipeline import MAX_SINCE_DAYS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -96,13 +102,47 @@ app = FastAPI(
 # - Your Streamlit UI (running on port 8501) wants to call this API (port 8000)
 # - Browsers block this by default for security
 # - CORS middleware tells browser "it's okay, allow it"
+_origins = get_settings().cors_origin_list
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, specify exact origins like ["http://localhost:8501"]
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow GET, POST, etc.
-    allow_headers=["*"],  # Allow all headers
+    allow_origins=_origins,
+    # Browsers refuse credentials with a wildcard origin anyway; only allow
+    # them when the origins are named.
+    allow_credentials='*' not in _origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+class RateLimiter:
+    """Sliding one-minute window per client. In-process: fine for one API
+    replica, which is all the free tier runs."""
+
+    def __init__(self, per_minute: int):
+        self.per_minute = per_minute
+        self._hits = defaultdict(deque)
+
+    def check(self, key: str) -> bool:
+        if self.per_minute <= 0:
+            return True
+        now = time.monotonic()
+        window = self._hits[key]
+        while window and now - window[0] > 60:
+            window.popleft()
+        if len(window) >= self.per_minute:
+            return False
+        window.append(now)
+        return True
+
+
+chat_limiter = RateLimiter(get_settings().chat_rate_limit_per_minute)
+
+
+def require_chat_quota(request: Request):
+    client = request.client.host if request.client else 'unknown'
+    if not chat_limiter.check(client):
+        raise HTTPException(status_code=429,
+                            detail=f"rate limit: {chat_limiter.per_minute} chat requests per minute")
 
 
 # --- Globals, populated at startup ---
@@ -126,28 +166,41 @@ rag_pipeline = None
 
 class SearchRequest(BaseModel):
     """
-    Request model for /search endpoint
-
-    - query: required string
-    - type: optional document type (startup, article, repo)
-    - filters: optional MongoDB filter on document fields
-    - top_k: optional int with default value 10
+    Hybrid search. Filters are typed fields, never a raw database query:
+    - type: one document type (startup, article, repo, launch, model, paper)
+    - location: case-insensitive substring match on the location field
+    - source: exact source tag (techcrunch, ycombinator, github, ...)
+    - since_days: only documents whose event_at is within the last N days
+    Unknown fields are rejected.
     """
-    query: str
+    query: str = Field(max_length=500)
     type: Optional[str] = None
-    filters: Optional[Dict] = None
-    top_k: int = 10
+    location: Optional[str] = Field(default=None, max_length=100)
+    source: Optional[str] = Field(default=None, max_length=50)
+    since_days: Optional[int] = Field(default=None, ge=1, le=MAX_SINCE_DAYS)
+    top_k: int = Field(default=10, ge=1, le=50)
     use_keyword: bool = True      # BM25 lexical channel
     use_semantic: bool = True     # E5 + FAISS dense channel
     use_graph: bool = True        # shared-entity graph expansion
 
-    model_config = ConfigDict(json_schema_extra={
+    model_config = ConfigDict(extra='forbid', json_schema_extra={
         "example": {
             "query": "AI music generation startup",
             "type": "startup",
+            "since_days": 30,
             "top_k": 5
         }
     })
+
+    def mongo_filters(self) -> Optional[Dict]:
+        filters: Dict = {}
+        if self.location:
+            filters['location'] = {'$regex': re.escape(self.location), '$options': 'i'}
+        if self.source:
+            filters['source'] = self.source
+        if self.since_days:
+            filters['event_at'] = {'$gte': datetime.now(timezone.utc) - timedelta(days=self.since_days)}
+        return filters or None
 
 
 class SearchResult(BaseModel):
@@ -169,10 +222,12 @@ class SearchResult(BaseModel):
 
 class ChatRequest(BaseModel):
     """Request for the RAG /chat endpoint"""
-    question: str
-    top_k: int = 8
-    history: Optional[List[Dict[str, str]]] = None
+    question: str = Field(max_length=2000)
+    top_k: int = Field(default=8, ge=1, le=20)
+    history: Optional[List[Dict[str, str]]] = Field(default=None, max_length=20)
     use_planner: bool = True
+
+    model_config = ConfigDict(extra='forbid')
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -207,8 +262,8 @@ class ChatResponse(BaseModel):
 
 class SimilarDocRequest(BaseModel):
     """Request for finding similar documents"""
-    doc_id: str
-    top_k: int = 5
+    doc_id: str = Field(max_length=24)
+    top_k: int = Field(default=5, ge=1, le=20)
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -238,8 +293,8 @@ def require_neo4j():
 
 
 class CypherQueryRequest(BaseModel):
-    """Request for executing Neo4j Cypher queries"""
-    query: str
+    """Read-only Cypher, admin token required."""
+    query: str = Field(max_length=4000)
     parameters: Optional[Dict] = None
 
     model_config = ConfigDict(json_schema_extra={
@@ -249,10 +304,13 @@ class CypherQueryRequest(BaseModel):
     })
 
 
+_CYPHER_WRITE = re.compile(r'\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|CALL|LOAD\s+CSV|FOREACH)\b', re.IGNORECASE)
+
+
 # --- Endpoints ---
 
 @app.get("/")
-async def root():
+def root():
     """
     Health check endpoint
 
@@ -269,6 +327,7 @@ async def root():
             "graph_query": "/graph/query",
             "entities": "/graph/entities",
             "stats": "/stats",
+            "documents": "/documents",
             "health": "/health",
             "meta": "/meta",
             "admin_reload": "/admin/reload",
@@ -280,7 +339,7 @@ async def root():
 # --- Search ---
 
 @app.post("/search", response_model=List[SearchResult])
-async def hybrid_search(request: SearchRequest):
+def hybrid_search(request: SearchRequest):
     """
     MAIN ENDPOINT: Hybrid Search
 
@@ -306,7 +365,7 @@ async def hybrid_search(request: SearchRequest):
         results = search_engine.search(
             query=request.query,
             doc_type=request.type,
-            filters=request.filters,
+            filters=request.mongo_filters(),
             top_k=request.top_k,
             use_keyword=request.use_keyword,
             use_semantic=request.use_semantic,
@@ -324,8 +383,8 @@ async def hybrid_search(request: SearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_chat_quota)])
+def chat(request: ChatRequest):
     """
     Ask a question, get an answer cited against the retrieved documents.
 
@@ -357,7 +416,7 @@ async def chat(request: ChatRequest):
 
 
 @app.post("/similar", response_model=List[SearchResult])
-async def find_similar_documents(request: SimilarDocRequest):
+def find_similar_documents(request: SimilarDocRequest):
     """
     Find documents similar to a given document
 
@@ -366,8 +425,8 @@ async def find_similar_documents(request: SimilarDocRequest):
     """
 
     try:
-        from bson import ObjectId
-
+        if not ObjectId.is_valid(request.doc_id):
+            raise HTTPException(status_code=404, detail="Document not found")
         doc = search_engine.documents.find_one({'_id': ObjectId(request.doc_id)})
 
         if not doc:
@@ -419,12 +478,11 @@ async def find_similar_documents(request: SimilarDocRequest):
 
 # --- Knowledge graph ---
 
-@app.post("/graph/query")
-async def execute_cypher_query(request: CypherQueryRequest):
+@app.post("/graph/query", dependencies=[Depends(require_admin)])
+def execute_cypher_query(request: CypherQueryRequest):
     """
-    Execute custom Neo4j Cypher queries
-
-    This exposes direct access to your knowledge graph!
+    Run a read-only Cypher query. Admin token required; write clauses are
+    rejected before the query reaches Neo4j.
 
     Example queries to try:
 
@@ -439,6 +497,8 @@ async def execute_cypher_query(request: CypherQueryRequest):
     }
     """
 
+    if _CYPHER_WRITE.search(request.query):
+        raise HTTPException(status_code=400, detail="only read-only Cypher is allowed here")
     require_neo4j()
     try:
         logger.info(f"Executing Cypher query: {request.query[:100]}...")
@@ -465,7 +525,7 @@ async def execute_cypher_query(request: CypherQueryRequest):
 
 
 @app.get("/graph/entities")
-async def get_top_entities(
+def get_top_entities(
     entity_type: Optional[str] = None,
     limit: int = Query(default=10, le=100) # Max 100 results
 ):
@@ -513,7 +573,7 @@ async def get_top_entities(
 
 
 @app.get("/graph/startup/{startup_name}")
-async def get_startup_entities(startup_name: str):
+def get_startup_entities(startup_name: str):
     """
     Get all entities mentioned by a specific startup
 
@@ -548,6 +608,64 @@ async def get_startup_entities(startup_name: str):
     except Exception as e:
         logger.error(f"Startup entities error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Documents ---
+
+def _public(doc: Dict) -> Dict:
+    """A document as the API shows it: no vectors, no NER payload."""
+    out = {k: v for k, v in doc.items() if k not in ('embedding', 'entities')}
+    out['_id'] = str(doc['_id'])
+    out['title'] = document_title(doc, doc.get('type'))
+    out['url'] = document_url(doc, doc.get('type'))
+    return out
+
+
+@app.get("/documents")
+def list_documents(
+    type: Optional[List[str]] = Query(default=None),
+    source: Optional[str] = Query(default=None, max_length=50),
+    since_days: Optional[int] = Query(default=None, ge=1, le=MAX_SINCE_DAYS),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10000),
+):
+    """Newest documents first by event_at. `type` may repeat."""
+    query: Dict[str, Any] = {}
+    if type:
+        bad = [t for t in type if t not in TYPE_NAMES]
+        if bad:
+            raise HTTPException(status_code=422, detail=f"unknown type(s) {bad}; choose from {list(TYPE_NAMES)}")
+        query['type'] = {'$in': type}
+    if source:
+        query['source'] = source
+    if since_days:
+        query['event_at'] = {'$gte': datetime.now(timezone.utc) - timedelta(days=since_days)}
+    else:
+        query['event_at'] = {'$ne': None}
+
+    cursor = (search_engine.documents.find(query, {'embedding': 0, 'entities': 0})
+              .sort([('event_at', -1), ('first_seen_at', -1)])
+              .skip(offset).limit(limit))
+    items = [_public(d) for d in cursor]
+    return {
+        'items': items,
+        'count': len(items),
+        'total': search_engine.documents.count_documents(query),
+        'offset': offset,
+        'limit': limit,
+    }
+
+
+@app.get("/documents/{doc_id}")
+def get_document(doc_id: str):
+    if not ObjectId.is_valid(doc_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    doc = search_engine.documents.find_one({'_id': ObjectId(doc_id)}, {'embedding': 0})
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    public = _public(doc)
+    public['entities'] = doc.get('entities') or []
+    return public
 
 
 # --- Operations ---
@@ -634,7 +752,7 @@ def admin_reload():
 # --- Statistics ---
 
 @app.get("/stats")
-async def get_statistics():
+def get_statistics():
     """
     Get overall system statistics
 

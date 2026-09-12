@@ -22,8 +22,8 @@ inventing one.
                     +--------------------------------------+
    question ------->|  1. PLAN    the LLM turns the        |
                     |             question into a plan:    |
-                    |             query, collection,       |
-                    |             location filter          |
+                    |             query, type, location,   |
+                    |             time window (since_days) |
                     +------------------+-------------------+
                                        v
    +---------------------------------------------------------------+
@@ -50,6 +50,17 @@ inventing one.
 Retrieval is fully deterministic - no model output influences ranking - so
 it stays reproducible and measurable. The LLM only shapes the query going
 in and the prose coming out.
+
+### Time
+
+Every document carries `event_at` (when the thing happened — a launch
+date, a publish date, a repo's creation date), and the planner sees
+today's date, so "this week" becomes `since_days: 7` and a filter on
+`event_at`. When nothing matches, constraints relax in a fixed order —
+drop the location, widen the window ×4, and only then drop the date — and
+every step is recorded in `plan.relaxations`. The answer model is told
+what window was actually searched, so "nothing in the last 7 days" never
+silently turns into an answer about last year.
 
 ### Why fuse by rank instead of score
 
@@ -215,9 +226,11 @@ grows, because the evaluation never reads the live database.
 | Method | Endpoint                  | Purpose                                   |
 | ------ | ------------------------- | ----------------------------------------- |
 | `POST` | `/chat`                   | Question in, cited answer out             |
-| `POST` | `/search`                 | Hybrid search; filter by `type`, toggle channels |
+| `POST` | `/search`                 | Hybrid search; typed filters (`type`, `location`, `source`, `since_days`) |
+| `GET`  | `/documents`              | Newest documents, filter by type/source/window |
+| `GET`  | `/documents/{id}`         | One document with its entities              |
 | `POST` | `/similar`                | "More like this" by embedding             |
-| `POST` | `/graph/query`            | Arbitrary Cypher                          |
+| `POST` | `/graph/query`            | Read-only Cypher (bearer `ADMIN_TOKEN`)   |
 | `GET`  | `/graph/entities`         | Most-mentioned entities                   |
 | `GET`  | `/graph/startup/{name}`   | One startup's entity neighbourhood        |
 | `GET`  | `/stats`                  | Corpus and index counts                   |
@@ -232,6 +245,11 @@ curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
 
 Search results carry the per-channel ranks that produced them
 (`"ranks": {"keyword": 1, "semantic": 3}`), so the ordering is explainable.
+
+Requests are validated and capped (question length, `top_k`, history
+turns; unknown fields are rejected), `/chat` is rate-limited per client
+IP (`CHAT_RATE_LIMIT_PER_MINUTE`), and CORS origins come from
+`CORS_ORIGINS`.
 
 ## Corpus
 

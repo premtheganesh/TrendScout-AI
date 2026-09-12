@@ -157,6 +157,34 @@ def document_text(doc: Dict, doc_type: str = None) -> str:
     return '. '.join(p for p in parts if p)
 
 
+# Shown to the answer model but never indexed: they change weekly and
+# would churn content_hash, and they are numbers, not meaning.
+_CONTEXT_METRICS = (
+    ('event_at', 'Date'), ('stars', 'GitHub stars'), ('forks', 'Forks'),
+    ('likes', 'Likes'), ('downloads', 'Downloads'), ('points', 'Points'),
+    ('num_comments', 'Comments'), ('upvotes', 'Upvotes'), ('github_stars', 'Code stars'),
+    ('funding', 'Funding'), ('yc_batch', 'YC batch'), ('publisher', 'Publisher'),
+    ('source', 'Source'),
+)
+
+
+def document_context(doc: Dict, doc_type: str = None, max_chars: int = 900) -> str:
+    """The text an answer model should see: the indexed text plus the
+    dated, numeric facts the index deliberately leaves out."""
+    text = document_text(doc, doc_type)[:max_chars]
+    extras = []
+    for field, label in _CONTEXT_METRICS:
+        value = doc.get(field)
+        if value in (None, '', 0, 'Unknown', []):
+            continue
+        if field == 'event_at':
+            value = value.date().isoformat() if hasattr(value, 'date') else str(value)[:10]
+        if field == 'funding' and 'Funding:' in text:
+            continue
+        extras.append(f"{label}: {value}")
+    return text + ('\n' + ' · '.join(extras) if extras else '')
+
+
 def document_title(doc: Dict, doc_type: str = None) -> str:
     doc_type = _resolve_type(doc, doc_type)
     if doc_type == 'startup':

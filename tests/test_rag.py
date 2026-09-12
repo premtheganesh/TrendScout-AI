@@ -3,19 +3,24 @@ RAG pipeline plumbing: plan validation, context construction, citation
 numbering and graceful degradation. The LLM is stubbed throughout.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
-from src.rag.pipeline import RAGPipeline, normalize_citations, Source
+from src.rag.pipeline import RAGPipeline, normalize_citations, Source, clamp_since_days
 
 
 class StubSearch:
-    def __init__(self, results=None):
+    def __init__(self, results=None, responder=None):
         self.results = results if results is not None else []
+        self.responder = responder      # optional: filters -> results
         self.calls = []
 
     def search(self, query, doc_type=None, filters=None, top_k=10, **kwargs):
         self.calls.append({'query': query, 'type': doc_type,
                            'filters': filters, 'top_k': top_k})
+        if self.responder is not None:
+            return self.responder(filters)
         return self.results
 
 
@@ -85,10 +90,33 @@ class TestPlanQuery:
     def test_uses_the_models_plan(self):
         llm = StubLLM(json_response={'search_query': 'AI music',
                                      'type': 'startup',
-                                     'location': 'Boston'})
+                                     'location': 'Boston',
+                                     'since_days': 30})
         plan = make_pipeline(llm=llm).plan_query('where is AI music in Boston?')
-        assert plan == {'search_query': 'AI music',
-                        'type': 'startup', 'location': 'Boston'}
+        assert plan == {'search_query': 'AI music', 'type': 'startup',
+                        'location': 'Boston', 'since_days': 30}
+
+    def test_since_days_is_clamped_and_validated(self):
+        assert clamp_since_days(7) == 7
+        assert clamp_since_days('30') == 30
+        assert clamp_since_days(10_000) == 365
+        assert clamp_since_days(0) is None
+        assert clamp_since_days(-5) is None
+        assert clamp_since_days(True) is None
+        assert clamp_since_days('soon') is None
+
+    def test_planner_prompt_carries_todays_date(self):
+        llm = StubLLM(json_response={'search_query': 'x'})
+        pipeline = make_pipeline(llm=llm)
+        pipeline.plan_query('what launched this week?')
+        # generate_json is stubbed; check the prompt through a spy instead
+        captured = {}
+        def spy(prompt, system_prompt=None, temperature=0.0):
+            captured['prompt'] = prompt
+            return {'search_query': 'x'}
+        llm.generate_json = spy
+        pipeline.plan_query('what launched this week?')
+        assert f"Today is {pipeline.today().isoformat()}" in captured['prompt']
 
     def test_rejects_an_invalid_type(self):
         llm = StubLLM(json_response={'search_query': 'x',
@@ -133,12 +161,61 @@ class TestRetrieve:
             {'search_query': 'q', 'type': None, 'location': None}, 5)
         assert search.calls[0]['filters'] is None
 
-    def test_empty_filtered_result_retries_unfiltered(self):
+    def test_since_days_becomes_an_event_at_window(self):
+        search = StubSearch(results=[result()])
+        plan = {'search_query': 'q', 'type': None, 'location': None, 'since_days': 7}
+        make_pipeline(search=search).retrieve(plan, 5)
+        cutoff = search.calls[0]['filters']['event_at']['$gte']
+        assert timedelta(days=6, hours=23) < datetime.now(timezone.utc) - cutoff < timedelta(days=7, minutes=1)
+        assert plan['relaxations'] == [] and plan['effective_since_days'] == 7
+
+    def test_empty_filtered_result_relaxes_location_first(self):
         search = StubSearch(results=[])
-        make_pipeline(search=search).retrieve(
-            {'search_query': 'q', 'type': None, 'location': 'Atlantis'}, 5)
+        plan = {'search_query': 'q', 'type': None, 'location': 'Atlantis'}
+        make_pipeline(search=search).retrieve(plan, 5)
         assert len(search.calls) == 2
         assert search.calls[1]['filters'] is None
+        assert plan['relaxations'] == ['dropped_location']
+
+    def test_date_filter_is_not_dropped_on_retry(self):
+        """Dropping the location must keep the date; the window widens
+        before the date is ever dropped, and every step is recorded."""
+        def responder(filters):
+            # Only an undated search returns anything.
+            return [result()] if not filters or 'event_at' not in filters else []
+        search = StubSearch(responder=responder)
+        plan = {'search_query': 'q', 'type': None, 'location': 'Atlantis', 'since_days': 7}
+        results = make_pipeline(search=search).retrieve(plan, 5)
+
+        assert results
+        steps = [c['filters'] for c in search.calls]
+        assert 'location' in steps[0] and 'event_at' in steps[0]
+        assert 'location' not in steps[1] and 'event_at' in steps[1]      # date kept
+        assert 'event_at' in steps[2]                                      # widened, still dated
+        assert steps[3] is None                                            # only now dropped
+        assert plan['relaxations'] == ['dropped_location', 'widened_window_to_28_days', 'dropped_date']
+        assert plan['effective_since_days'] is None
+
+    def test_widened_window_is_used_when_it_matches(self):
+        def responder(filters):
+            if filters and 'event_at' in filters:
+                age = datetime.now(timezone.utc) - filters['event_at']['$gte']
+                return [result()] if age > timedelta(days=20) else []
+            return [result()]
+        search = StubSearch(responder=responder)
+        plan = {'search_query': 'q', 'type': None, 'location': None, 'since_days': 7}
+        make_pipeline(search=search).retrieve(plan, 5)
+        assert plan['relaxations'] == ['widened_window_to_28_days']
+        assert plan['effective_since_days'] == 28
+
+    def test_retrieval_note_explains_the_window(self):
+        pipeline = make_pipeline()
+        note = pipeline.retrieval_note({'since_days': 7, 'effective_since_days': 28,
+                                        'relaxations': ['widened_window_to_28_days']})
+        assert 'last 7 days' in note and 'last 28 days' in note
+        note = pipeline.retrieval_note({'since_days': 7, 'effective_since_days': None,
+                                        'relaxations': ['dropped_date']})
+        assert 'not covered' in note
 
 
 class TestBuildContext:
@@ -150,6 +227,13 @@ class TestBuildContext:
     def test_context_labels_each_source(self):
         context, _ = make_pipeline().build_context([result()])
         assert context.startswith('[1] Startup: Suno')
+
+    def test_context_carries_dates_and_metrics_the_index_leaves_out(self):
+        hit = result()
+        hit['document'].update({'event_at': datetime(2026, 9, 10, tzinfo=timezone.utc),
+                                'funding': 'Series B, $125M', 'source': 'ycombinator'})
+        context, _ = make_pipeline().build_context([hit])
+        assert 'Date: 2026-09-10' in context and 'Series B' in context
 
     def test_context_includes_the_url(self):
         context, _ = make_pipeline().build_context([result()])
@@ -179,6 +263,13 @@ class TestGenerate:
         llm = StubLLM()
         make_pipeline(llm=llm).generate('q', 'CONTEXT_MARKER')
         assert 'CONTEXT_MARKER' in llm.prompts[0]
+
+    def test_prompt_carries_the_retrieval_note(self):
+        llm = StubLLM()
+        make_pipeline(llm=llm).generate('q', 'ctx', plan={
+            'since_days': 7, 'effective_since_days': 28,
+            'relaxations': ['widened_window_to_28_days']})
+        assert 'Retrieval note:' in llm.prompts[0] and 'last 28 days' in llm.prompts[0]
 
     def test_history_is_included(self):
         llm = StubLLM()
