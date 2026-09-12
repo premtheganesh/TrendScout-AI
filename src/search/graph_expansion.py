@@ -5,6 +5,8 @@ import logging
 from collections import defaultdict
 from typing import Dict, List, Optional
 
+from src.corpus.types import COLLECTION, NEO4J_LABEL_TO_TYPE, normalize_type
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,16 +25,13 @@ class GraphExpander:
 
     def _corpus_size(self) -> int:
         if self._total_docs is None:
-            self._total_docs = sum(
-                self.mongo.db[c].count_documents({})
-                for c in ('startups', 'articles', 'github_repos')
-            )
+            self._total_docs = self.mongo.db[COLLECTION].count_documents({})
         return max(self._total_docs, 1)
 
     def expand(
         self,
         seed_doc_ids: List[str],
-        collection: str = None,
+        doc_type: str = None,
         top_k: int = 20,
         max_entities_per_seed: int = 25,
     ) -> List[Dict]:
@@ -55,7 +54,7 @@ class GraphExpander:
 
         n_docs = self._corpus_size()
         neighbour_scores: Dict[str, float] = defaultdict(float)
-        neighbour_collection: Dict[str, str] = {}
+        neighbour_type: Dict[str, str] = {}
         shared: Dict[str, List[str]] = defaultdict(list)
 
         for entity in entities:
@@ -66,7 +65,10 @@ class GraphExpander:
             linked = {}
             for m in mentions:
                 if isinstance(m, dict) and m.get('doc_id'):
-                    linked[m['doc_id']] = m.get('collection', '')
+                    # `collection` is the pre-migration key; tolerate it.
+                    linked[m['doc_id']] = (m.get('type')
+                                           or normalize_type(m.get('collection'))
+                                           or '')
 
             degree = len(linked)
             if degree <= 1 or degree > max_entities_per_seed:
@@ -74,19 +76,19 @@ class GraphExpander:
 
             weight = math.log(1 + n_docs / degree)
 
-            for doc_id, doc_collection in linked.items():
+            for doc_id, linked_type in linked.items():
                 if doc_id in seed_set:
                     continue
-                if collection and doc_collection != collection:
+                if doc_type and linked_type != doc_type:
                     continue
                 neighbour_scores[doc_id] += weight
-                neighbour_collection[doc_id] = doc_collection
+                neighbour_type[doc_id] = linked_type
                 shared[doc_id].append(entity.get('entity_text', ''))
 
         results = [
             {
                 'doc_id': doc_id,
-                'collection': neighbour_collection.get(doc_id, ''),
+                'type': neighbour_type.get(doc_id, ''),
                 'score': score,
                 'shared_entities': sorted(set(shared[doc_id]))[:8],
             }
@@ -103,14 +105,14 @@ class GraphExpander:
     def expand_via_neo4j(
         self,
         seed_doc_ids: List[str],
-        collection: str = None,
+        doc_type: str = None,
         top_k: int = 20,
         max_entities_per_seed: int = 25,
     ) -> List[Dict]:
         """Same scoring as expand(), executed in Cypher. Falls back to
         MongoDB when Neo4j is unreachable."""
         if not self.neo4j or not getattr(self.neo4j, 'available', False):
-            return self.expand(seed_doc_ids, collection=collection, top_k=top_k,
+            return self.expand(seed_doc_ids, doc_type=doc_type, top_k=top_k,
                                max_entities_per_seed=max_entities_per_seed)
 
         if not seed_doc_ids:
@@ -141,31 +143,26 @@ class GraphExpander:
         ORDER BY score DESC
         LIMIT $top_k
         """
-        label_to_collection = {
-            'Startup': 'startups',
-            'Article': 'articles',
-            'GitHubRepo': 'github_repos',
-        }
         try:
             records = self.neo4j.run_query(cypher, {
                 'seed_ids': seed_doc_ids,
                 'max_degree': max_entities_per_seed,
                 'n_docs': self._corpus_size(),
-                'top_k': top_k * 3 if collection else top_k,
+                'top_k': top_k * 3 if doc_type else top_k,
             })
         except Exception as e:
             logger.warning(f"Neo4j expansion failed, using MongoDB path: {e}")
-            return self.expand(seed_doc_ids, collection=collection, top_k=top_k,
+            return self.expand(seed_doc_ids, doc_type=doc_type, top_k=top_k,
                                max_entities_per_seed=max_entities_per_seed)
 
         results = []
         for r in records:
-            doc_collection = label_to_collection.get(r['node_label'], '')
-            if collection and doc_collection != collection:
+            linked_type = NEO4J_LABEL_TO_TYPE.get(r['node_label'], '')
+            if doc_type and linked_type != doc_type:
                 continue
             results.append({
                 'doc_id': r['doc_id'],
-                'collection': doc_collection,
+                'type': linked_type,
                 'score': float(r['score']),
                 'shared_entities': sorted(set(r['shared_entities'] or []))[:8],
             })

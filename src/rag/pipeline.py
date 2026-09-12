@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Any
 
+from src.corpus.types import DOC_TYPES, TYPE_NAMES, label_for, normalize_type
 from src.llm.groq_client import GroqClient
 from src.search.document_text import document_text, document_title, document_url
 
@@ -16,19 +17,13 @@ MAX_CHARS_PER_DOC = 900
 
 # gpt-oss models intermittently emit CJK bracket citations (【1】) instead of
 # ASCII ones. The UI linkifies [n], so normalise before returning.
-_CJK_CITATION = re.compile(r'\u3010\s*(\d+)\s*\u3011')
+_CJK_CITATION = re.compile(r'【\s*(\d+)\s*】')
 
 
 def normalize_citations(text: str) -> str:
     """Rewrite 【n】 style citations as [n]."""
     return _CJK_CITATION.sub(r'[\1]', text)
 
-
-COLLECTION_LABEL = {
-    'startups': 'Startup',
-    'articles': 'News article',
-    'github_repos': 'GitHub repository',
-}
 
 ANSWER_SYSTEM_PROMPT = """You are TrendScout AI, an analyst covering the AI \
 startup ecosystem. You answer questions using ONLY the numbered sources \
@@ -58,12 +53,23 @@ do not describe your own process."""
 PLANNER_SYSTEM_PROMPT = """You turn a user's question about AI startups into \
 a retrieval plan. Respond with JSON only."""
 
+
+def _type_catalogue() -> str:
+    width = max(len(name) for name in TYPE_NAMES) + 2
+    return '\n'.join(
+        f'  {json_quote(name):<{width}} - {DOC_TYPES[name].planner_hint}'
+        for name in TYPE_NAMES
+    )
+
+
+def json_quote(value: str) -> str:
+    return f'"{value}"'
+
+
 PLANNER_PROMPT = """Analyse this question and produce a retrieval plan.
 
-{context_block}Available collections:
-  "startups"     - AI startup companies (name, description, location, funding, investors)
-  "articles"     - TechCrunch news articles (title, description, author, categories)
-  "github_repos" - open-source repositories (name, description, language, topics, stars)
+{context_block}Available document types:
+{type_catalogue}
 
 If earlier conversation is shown above, resolve any reference the question
 makes to it before writing the plan. "that city", "they", "the company",
@@ -78,8 +84,8 @@ Return JSON with exactly these keys:
                              terms. Expand obvious abbreviations, and
                              substitute referents with the names they point
                              to.
-  "collection":   string or null - one of the three collection names if the
-                             question is clearly about only that kind of
+  "type":         string or null - one of the document type names above if
+                             the question is clearly about only that kind of
                              thing, otherwise null.
   "location":     string or null - a city, state or country if the question
                              filters by place, otherwise null.
@@ -87,20 +93,20 @@ Return JSON with exactly these keys:
 
 Examples:
 Question: "What open source RAG frameworks are there?"
-{{"search_query": "open source retrieval augmented generation framework", "collection": "github_repos", "location": null}}
+{{"search_query": "open source retrieval augmented generation framework", "type": "repo", "location": null}}
 
 Question: "Which AI startups in San Francisco raised Series B?"
-{{"search_query": "AI startup Series B funding", "collection": "startups", "location": "San Francisco"}}
+{{"search_query": "AI startup Series B funding", "type": "startup", "location": "San Francisco"}}
 
 Question: "What's the latest news on AI coding tools?"
-{{"search_query": "AI coding tools developer", "collection": "articles", "location": null}}
+{{"search_query": "AI coding tools developer", "type": "article", "location": null}}
 
 Question: "Tell me about Suno"
-{{"search_query": "Suno AI music generation", "collection": null, "location": null}}
+{{"search_query": "Suno AI music generation", "type": null, "location": null}}
 
 With earlier conversation mentioning Suno in Cambridge, Massachusetts:
 Question: "who else is in that city?"
-{{"search_query": "AI startup Cambridge Massachusetts", "collection": "startups", "location": "Cambridge"}}
+{{"search_query": "AI startup Cambridge Massachusetts", "type": "startup", "location": "Cambridge"}}
 
 Now this question:
 Question: "{question}"
@@ -111,7 +117,7 @@ JSON:"""
 class Source:
     n: int
     doc_id: str
-    collection: str
+    type: str
     title: str
     url: str
     snippet: str
@@ -174,7 +180,7 @@ class RAGPipeline:
 
         fallback = {
             'search_query': question,
-            'collection': None,
+            'type': None,
             'location': None,
         }
 
@@ -193,7 +199,10 @@ class RAGPipeline:
         try:
             plan = self.llm.generate_json(
                 prompt=PLANNER_PROMPT.format(
-                    question=question, context_block=context_block),
+                    question=question,
+                    context_block=context_block,
+                    type_catalogue=_type_catalogue(),
+                ),
                 system_prompt=PLANNER_SYSTEM_PROMPT,
                 temperature=0.0,
             )
@@ -201,9 +210,9 @@ class RAGPipeline:
             logger.warning(f"Query planning failed, using raw question: {e}")
             return fallback
 
-        collection = plan.get('collection')
-        if collection not in ('startups', 'articles', 'github_repos'):
-            collection = None
+        # Accept legacy collection names too; the model has seen them in
+        # older transcripts.
+        doc_type = normalize_type(plan.get('type') or plan.get('collection'))
 
         search_query = plan.get('search_query')
         if not isinstance(search_query, str) or not search_query.strip():
@@ -215,7 +224,7 @@ class RAGPipeline:
 
         return {
             'search_query': search_query.strip(),
-            'collection': collection,
+            'type': doc_type,
             'location': location,
         }
 
@@ -228,7 +237,7 @@ class RAGPipeline:
 
         results = self.search.search(
             query=plan['search_query'],
-            collection=plan.get('collection'),
+            doc_type=plan.get('type'),
             filters=filters,
             top_k=top_k,
         )
@@ -239,7 +248,7 @@ class RAGPipeline:
             logger.info("Location filter matched nothing; retrying unfiltered")
             results = self.search.search(
                 query=plan['search_query'],
-                collection=plan.get('collection'),
+                doc_type=plan.get('type'),
                 top_k=top_k,
             )
 
@@ -251,12 +260,12 @@ class RAGPipeline:
 
         for i, result in enumerate(results, start=1):
             doc = result.get('document') or {}
-            collection = result.get('collection', '')
-            title = result.get('title') or document_title(doc, collection)
-            url = result.get('url') or document_url(doc, collection)
-            body = document_text(doc, collection)[:MAX_CHARS_PER_DOC]
+            doc_type = result.get('type') or doc.get('type', '')
+            title = result.get('title') or document_title(doc, doc_type)
+            url = result.get('url') or document_url(doc, doc_type)
+            body = document_text(doc, doc_type)[:MAX_CHARS_PER_DOC]
 
-            header = f"[{i}] {COLLECTION_LABEL.get(collection, collection)}: {title}"
+            header = f"[{i}] {label_for(doc_type)}: {title}"
             block = [header, body]
             if url:
                 block.append(f"Source URL: {url}")
@@ -265,7 +274,7 @@ class RAGPipeline:
             sources.append(Source(
                 n=i,
                 doc_id=result.get('doc_id', ''),
-                collection=collection,
+                type=doc_type,
                 title=title,
                 url=url,
                 snippet=body[:280],
@@ -287,9 +296,9 @@ class RAGPipeline:
                     "configured. The retrieved sources are listed below.")
 
         if not context.strip():
+            kinds = ', '.join(label_for(t).lower() + 's' for t in TYPE_NAMES)
             return ("Nothing in the indexed corpus matches that question. "
-                    "The index covers AI startups, TechCrunch articles and "
-                    "AI-related GitHub repositories.")
+                    f"The index covers {kinds}.")
 
         prompt_parts = []
 
@@ -338,7 +347,7 @@ class RAGPipeline:
         if use_planner:
             plan = self.plan_query(question, history=history)
         else:
-            plan = {'search_query': question, 'collection': None, 'location': None}
+            plan = {'search_query': question, 'type': None, 'location': None}
 
         results = self.retrieve(plan, top_k)
         context, sources = self.build_context(results)

@@ -17,6 +17,7 @@ import faiss
 import numpy as np
 
 from src.config import get_settings
+from src.corpus.types import COLLECTION, TYPE_NAMES
 from src.database.mongo_client import MongoDBClient
 from src.embeddings.embedding_generator import EmbeddingGenerator
 from src.search.bm25_index import BM25Index
@@ -25,7 +26,6 @@ from src.search.document_text import document_text
 logging.basicConfig(level=logging.INFO, format='%(levelname)s  %(message)s')
 logger = logging.getLogger(__name__)
 
-COLLECTIONS = ('startups', 'articles', 'github_repos')
 
 
 def build_dense_index(mongo, generator):
@@ -33,23 +33,26 @@ def build_dense_index(mongo, generator):
     print("DENSE INDEX  (E5-base-v2 -> FAISS)")
     print("=" * 72)
 
-    texts, doc_ids, collections, documents = [], [], [], []
+    texts, doc_ids, types, documents = [], [], [], []
 
-    for collection in COLLECTIONS:
-        docs = list(mongo.db[collection].find())
-        print(f"  {collection:<15} {len(docs):>4} documents")
-        for doc in docs:
-            text = document_text(doc, collection)
-            if not text.strip():
-                continue
-            texts.append(text)
-            doc_ids.append(str(doc['_id']))
-            collections.append(collection)
-            documents.append(doc)
+    counts = {name: 0 for name in TYPE_NAMES}
+    for doc in mongo.db[COLLECTION].find():
+        doc_type = doc.get('type', '')
+        text = document_text(doc, doc_type)
+        if not text.strip():
+            continue
+        texts.append(text)
+        doc_ids.append(str(doc['_id']))
+        types.append(doc_type)
+        documents.append(doc)
+        counts[doc_type] = counts.get(doc_type, 0) + 1
+
+    for name, n in counts.items():
+        print(f"  {name:<15} {n:>4} documents")
 
     if not texts:
         raise SystemExit(
-            "No documents found in MongoDB. Run the scrapers before indexing."
+            "No documents found in MongoDB. Run the ingestion before indexing."
         )
 
     print(f"\n  Embedding {len(texts)} documents with the 'passage: ' prefix...")
@@ -60,7 +63,7 @@ def build_dense_index(mongo, generator):
     print("  Writing embeddings back to MongoDB...")
     now = datetime.now(timezone.utc).isoformat()
     for i, doc in enumerate(documents):
-        mongo.db[collections[i]].update_one(
+        mongo.db[COLLECTION].update_one(
             {'_id': doc['_id']},
             {'$set': {
                 'embedding': embeddings[i].tolist(),
@@ -82,7 +85,7 @@ def build_dense_index(mongo, generator):
     with open(metadata_path, 'wb') as f:
         pickle.dump({
             'ids': doc_ids,
-            'metadata': [{'collection': c} for c in collections],
+            'metadata': [{'type': t} for t in types],
             'model': 'intfloat/e5-base-v2',
             'prefix': 'passage: ',
             'built_at': now,

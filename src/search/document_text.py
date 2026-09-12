@@ -1,10 +1,19 @@
-"""Document to text conversion shared by all retrieval channels."""
+"""
+Document to text conversion shared by all retrieval channels.
+
+This is the single definition of what a document *says*: BM25, the
+embedder, the entity extractor, the RAG context builder and the content
+hash all read it. If they disagreed, RRF would be fusing rankings over
+different texts.
+"""
 
 from typing import Dict, List, Any
 import ast
 import re
 
-_INVISIBLE = re.compile(r'[   ​‌‍﻿]')
+from src.corpus.types import normalize_type
+
+_INVISIBLE = re.compile(r'[   ​‌‍﻿]')
 _WS = re.compile(r'\s+')
 
 
@@ -42,11 +51,20 @@ def _clean(value: Any) -> str:
     return text
 
 
-def document_text(doc: Dict, collection: str) -> str:
+def _resolve_type(doc: Dict, doc_type: Any) -> str:
+    """Registered type from the argument, else from the document itself,
+    else whatever was passed (unknown types get the generic rendering)."""
+    return (normalize_type(doc_type)
+            or normalize_type(doc.get('type'))
+            or (doc_type if isinstance(doc_type, str) else ''))
+
+
+def document_text(doc: Dict, doc_type: str = None) -> str:
     """Indexable text for one document, most identifying fields first."""
+    doc_type = _resolve_type(doc, doc_type)
     parts: List[str] = []
 
-    if collection == 'startups':
+    if doc_type == 'startup':
         parts.append(_clean(doc.get('name')))
         parts.append(_clean(doc.get('description')))
         location = _clean(doc.get('location'))
@@ -59,7 +77,7 @@ def document_text(doc: Dict, collection: str) -> str:
         if investors:
             parts.append(f"Investors: {', '.join(investors)}")
 
-    elif collection == 'articles':
+    elif doc_type == 'article':
         parts.append(_clean(doc.get('title')))
         parts.append(_clean(doc.get('description')))
         author = _clean(doc.get('author'))
@@ -69,7 +87,7 @@ def document_text(doc: Dict, collection: str) -> str:
         if categories:
             parts.append(f"Topics: {', '.join(categories)}")
 
-    elif collection == 'github_repos':
+    elif doc_type == 'repo':
         parts.append(_clean(doc.get('full_name')) or _clean(doc.get('name')))
         parts.append(_clean(doc.get('description')))
         language = _clean(doc.get('primary_language'))
@@ -89,12 +107,13 @@ def document_text(doc: Dict, collection: str) -> str:
     return '. '.join(p for p in parts if p)
 
 
-def document_title(doc: Dict, collection: str) -> str:
-    if collection == 'startups':
+def document_title(doc: Dict, doc_type: str = None) -> str:
+    doc_type = _resolve_type(doc, doc_type)
+    if doc_type == 'startup':
         return _clean(doc.get('name')) or 'Untitled startup'
-    if collection == 'articles':
+    if doc_type == 'article':
         return _clean(doc.get('title')) or 'Untitled article'
-    if collection == 'github_repos':
+    if doc_type == 'repo':
         return (_clean(doc.get('full_name'))
                 or _clean(doc.get('name'))
                 or 'Untitled repository')
@@ -103,7 +122,7 @@ def document_title(doc: Dict, collection: str) -> str:
             or 'Untitled')
 
 
-def document_url(doc: Dict, collection: str) -> str:
+def document_url(doc: Dict, doc_type: str = None) -> str:
     for field in ('link', 'article_url', 'html_url', 'url', 'homepage'):
         url = _clean(doc.get(field))
         if url.startswith('http'):

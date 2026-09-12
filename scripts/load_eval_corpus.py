@@ -25,10 +25,11 @@ from collections import defaultdict
 from bson import json_util
 
 from src.config import PROJECT_ROOT, get_settings
+from src.corpus.schema import ensure_indexes
 from src.database.mongo_client import MongoDBClient
 
 LIVE_DB = 'trendscout_ai'
-DEFAULT_CORPUS = os.path.join(PROJECT_ROOT, 'data', 'eval', 'corpus_v1.jsonl')
+DEFAULT_CORPUS = os.path.join(PROJECT_ROOT, 'data', 'eval', 'corpus_v2.jsonl')
 
 
 def load(mongo, path: str) -> dict:
@@ -45,10 +46,7 @@ def load(mongo, path: str) -> dict:
         mongo.db[collection].insert_many(docs, ordered=True)
         counts[collection] = len(docs)
 
-    # Same indexes extract_entities.py creates on a live rebuild.
-    if 'canonical_entities' in grouped:
-        mongo.db.canonical_entities.create_index('entity_text')
-        mongo.db.canonical_entities.create_index('mentioned_in.doc_id')
+    ensure_indexes(mongo.db)
 
     return counts
 

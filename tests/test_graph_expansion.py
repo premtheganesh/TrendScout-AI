@@ -52,12 +52,9 @@ class FakeDatabase:
 
 class FakeMongo:
     def __init__(self, entities, corpus_size=100):
-        per = max(corpus_size // 3, 1)
         self.db = FakeDatabase({
             'canonical_entities': FakeEntities(entities),
-            'startups': FakeCounted(per),
-            'articles': FakeCounted(per),
-            'github_repos': FakeCounted(corpus_size - 2 * per),
+            'documents': FakeCounted(corpus_size),
         })
 
 
@@ -65,14 +62,14 @@ def entity(text, docs, etype='ORG'):
     return {
         'entity_text': text,
         'entity_type': etype,
-        'mentioned_in': [{'doc_id': d, 'collection': c} for d, c in docs],
+        'mentioned_in': [{'doc_id': d, 'type': t} for d, t in docs],
     }
 
 
 class TestGraphExpander:
     def test_finds_documents_sharing_an_entity(self):
         mongo = FakeMongo([
-            entity('Suno', [('seed', 'startups'), ('article1', 'articles')]),
+            entity('Suno', [('seed', 'startup'), ('article1', 'article')]),
         ])
         results = GraphExpander(mongo).expand(['seed'])
         assert [r['doc_id'] for r in results] == ['article1']
@@ -80,47 +77,58 @@ class TestGraphExpander:
 
     def test_seed_documents_are_never_returned(self):
         mongo = FakeMongo([
-            entity('Suno', [('seed', 'startups'), ('seed2', 'startups')]),
+            entity('Suno', [('seed', 'startup'), ('seed2', 'startup')]),
         ])
         results = GraphExpander(mongo).expand(['seed', 'seed2'])
         assert results == []
 
     def test_rare_entities_outweigh_common_ones(self):
         """Co-mentioning a rare entity is stronger evidence than a common one."""
-        common = entity('Google', [('seed', 'startups')] +
-                        [(f'd{i}', 'articles') for i in range(20)])
-        rare = entity('Suno', [('seed', 'startups'), ('rare_hit', 'articles')])
+        common = entity('Google', [('seed', 'startup')] +
+                        [(f'd{i}', 'article') for i in range(20)])
+        rare = entity('Suno', [('seed', 'startup'), ('rare_hit', 'article')])
         results = GraphExpander(FakeMongo([common, rare])).expand(['seed'])
         assert results[0]['doc_id'] == 'rare_hit'
 
     def test_hub_entities_are_excluded(self):
-        hub = entity('AI', [('seed', 'startups')] +
-                     [(f'd{i}', 'articles') for i in range(200)])
+        hub = entity('AI', [('seed', 'startup')] +
+                     [(f'd{i}', 'article') for i in range(200)])
         results = GraphExpander(FakeMongo([hub])).expand(
             ['seed'], max_entities_per_seed=25)
         assert results == []
 
     def test_degree_one_entities_contribute_nothing(self):
-        solo = entity('Nobody', [('seed', 'startups')])
+        solo = entity('Nobody', [('seed', 'startup')])
         assert GraphExpander(FakeMongo([solo])).expand(['seed']) == []
 
     def test_more_shared_entities_ranks_higher(self):
         mongo = FakeMongo([
-            entity('A', [('seed', 'startups'), ('two', 'articles')]),
-            entity('B', [('seed', 'startups'), ('two', 'articles')]),
-            entity('C', [('seed', 'startups'), ('one', 'articles')]),
+            entity('A', [('seed', 'startup'), ('two', 'article')]),
+            entity('B', [('seed', 'startup'), ('two', 'article')]),
+            entity('C', [('seed', 'startup'), ('one', 'article')]),
         ])
         results = GraphExpander(mongo).expand(['seed'])
         assert results[0]['doc_id'] == 'two'
         assert len(results[0]['shared_entities']) == 2
 
-    def test_collection_filter(self):
+    def test_type_filter(self):
         mongo = FakeMongo([
-            entity('X', [('seed', 'startups'), ('a1', 'articles'),
-                         ('r1', 'github_repos')]),
+            entity('X', [('seed', 'startup'), ('a1', 'article'),
+                         ('r1', 'repo')]),
         ])
-        results = GraphExpander(mongo).expand(['seed'], collection='articles')
+        results = GraphExpander(mongo).expand(['seed'], doc_type='article')
         assert [r['doc_id'] for r in results] == ['a1']
+
+    def test_legacy_collection_key_on_links_is_understood(self):
+        """Entity links written before the migration used `collection`."""
+        legacy = {
+            'entity_text': 'Suno', 'entity_type': 'ORG',
+            'mentioned_in': [{'doc_id': 'seed', 'collection': 'startups'},
+                             {'doc_id': 'hit', 'collection': 'articles'}],
+        }
+        results = GraphExpander(FakeMongo([legacy])).expand(['seed'], doc_type='article')
+        assert [r['doc_id'] for r in results] == ['hit']
+        assert results[0]['type'] == 'article' 
 
     def test_no_seeds_returns_nothing(self):
         assert GraphExpander(FakeMongo([])).expand([]) == []
@@ -129,7 +137,7 @@ class TestGraphExpander:
         assert GraphExpander(FakeMongo([])).expand(['unknown']) == []
 
     def test_top_k_is_respected(self):
-        ents = [entity(f'E{i}', [('seed', 'startups'), (f'n{i}', 'articles')])
+        ents = [entity(f'E{i}', [('seed', 'startup'), (f'n{i}', 'article')])
                 for i in range(10)]
         assert len(GraphExpander(FakeMongo(ents)).expand(['seed'], top_k=3)) == 3
 
@@ -137,8 +145,8 @@ class TestGraphExpander:
         dup = {
             'entity_text': 'Suno',
             'entity_type': 'ORG',
-            'mentioned_in': [{'doc_id': 'seed', 'collection': 'startups'}] * 3
-                            + [{'doc_id': 'hit', 'collection': 'articles'}] * 4,
+            'mentioned_in': [{'doc_id': 'seed', 'type': 'startup'}] * 3
+                            + [{'doc_id': 'hit', 'type': 'article'}] * 4,
         }
         results = GraphExpander(FakeMongo([dup])).expand(['seed'])
         assert len(results) == 1
@@ -146,7 +154,7 @@ class TestGraphExpander:
 
     def test_legacy_string_mentions_are_skipped_not_crashed(self):
         """Older rows stored `mentioned_in` as a repr string; skip, do not raise."""
-        good = entity('Suno', [('seed', 'startups'), ('hit', 'articles')])
+        good = entity('Suno', [('seed', 'startup'), ('hit', 'article')])
         broken = {'entity_text': 'X', 'entity_type': 'ORG',
                   'mentioned_in': "[{'doc_id': 'seed'}]"}
 
@@ -157,7 +165,7 @@ class TestGraphExpander:
 
     def test_neo4j_path_falls_back_when_unavailable(self):
         mongo = FakeMongo([
-            entity('Suno', [('seed', 'startups'), ('hit', 'articles')]),
+            entity('Suno', [('seed', 'startup'), ('hit', 'article')]),
         ])
         expander = GraphExpander(mongo, neo4j_client=None)
         results = expander.expand_via_neo4j(['seed'])
@@ -170,7 +178,7 @@ class TestGraphExpander:
                 raise RuntimeError("connection lost")
 
         mongo = FakeMongo([
-            entity('Suno', [('seed', 'startups'), ('hit', 'articles')]),
+            entity('Suno', [('seed', 'startup'), ('hit', 'article')]),
         ])
         expander = GraphExpander(mongo, neo4j_client=BrokenNeo4j())
         results = expander.expand_via_neo4j(['seed'])

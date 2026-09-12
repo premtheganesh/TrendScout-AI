@@ -12,10 +12,10 @@ from bson import json_util
 
 from src.config import PROJECT_ROOT
 
-CORPUS = os.path.join(PROJECT_ROOT, 'data', 'eval', 'corpus_v1.jsonl')
+CORPUS = os.path.join(PROJECT_ROOT, 'data', 'eval', 'corpus_v2.jsonl')
 
-EXPECTED = {'startups': 140, 'articles': 20, 'github_repos': 50,
-            'canonical_entities': 647}
+EXPECTED = {'documents': 210, 'canonical_entities': 647}
+EXPECTED_TYPES = {'startup': 140, 'article': 20, 'repo': 50}
 
 
 @pytest.fixture(scope='module')
@@ -26,6 +26,17 @@ def records():
 
 def test_snapshot_has_the_frozen_document_counts(records):
     assert Counter(r['collection'] for r in records) == EXPECTED
+
+
+def test_snapshot_has_the_frozen_type_counts(records):
+    assert Counter(r['doc']['type'] for r in records
+                   if r['collection'] == 'documents') == EXPECTED_TYPES
+
+
+def test_every_document_has_a_doc_key_and_hash(records):
+    for r in records:
+        if r['collection'] == 'documents':
+            assert r['doc']['doc_key'] and r['doc']['content_hash']
 
 
 def test_embeddings_are_not_in_the_snapshot(records):
@@ -49,8 +60,8 @@ def test_every_query_label_resolves_to_a_snapshot_title(records):
     import json
     from src.search.document_text import document_title
 
-    titles = {document_title(r['doc'], r['collection'])
-              for r in records if r['collection'] != 'canonical_entities'}
+    titles = {document_title(r['doc'])
+              for r in records if r['collection'] == 'documents'}
     with open(os.path.join(PROJECT_ROOT, 'data', 'eval', 'queries.json')) as f:
         spec = json.load(f)
     missing = [name for q in spec['queries'] for name in q['relevant']

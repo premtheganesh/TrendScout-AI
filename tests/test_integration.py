@@ -3,6 +3,7 @@
 import pytest
 
 from conftest import needs_mongo, needs_indexes
+from src.corpus.types import COLLECTION, TYPE_NAMES
 
 
 @needs_mongo
@@ -34,15 +35,15 @@ class TestRealSearch:
         for r in engine.search('AI', top_k=3):
             assert 'embedding' not in r['document']
 
-    def test_collection_filter_is_honoured(self, engine):
-        results = engine.search('framework', collection='github_repos', top_k=5)
+    def test_type_filter_is_honoured(self, engine):
+        results = engine.search('framework', doc_type='repo', top_k=5)
         assert results
-        assert all(r['collection'] == 'github_repos' for r in results)
+        assert all(r['type'] == 'repo' for r in results)
 
     def test_structured_filter_does_not_leak(self, engine):
         """Dense hits used to bypass the location filter entirely."""
         results = engine.search(
-            'AI startup', collection='startups',
+            'AI startup', doc_type='startup',
             filters={'location': {'$regex': 'Boston', '$options': 'i'}},
             top_k=10)
         assert results
@@ -80,27 +81,39 @@ class TestRealSearch:
 
 @needs_mongo
 class TestCorpusIntegrity:
-    def test_all_collections_are_populated(self, mongo):
-        for name in ('startups', 'articles', 'github_repos'):
-            assert mongo.db[name].count_documents({}) > 0, f'{name} is empty'
+    def test_every_type_is_populated(self, mongo):
+        for name in TYPE_NAMES:
+            assert mongo.db[COLLECTION].count_documents({'type': name}) > 0, f'no {name} documents'
+
+    def test_every_document_has_a_registered_type(self, mongo):
+        stray = mongo.db[COLLECTION].count_documents({'type': {'$nin': list(TYPE_NAMES)}})
+        assert stray == 0
+
+    def test_doc_keys_are_unique_and_indexed(self, mongo):
+        unique_keys = [dict(i['key']) for i in mongo.db[COLLECTION].list_indexes()
+                       if i.get('unique')]
+        assert {'doc_key': 1} in unique_keys
+        assert mongo.db[COLLECTION].count_documents({'doc_key': {'$exists': False}}) == 0
 
     def test_every_document_has_an_embedding(self, mongo):
-        for name in ('startups', 'articles', 'github_repos'):
-            missing = mongo.db[name].count_documents(
-                {'embedding': {'$exists': False}})
-            assert missing == 0, f'{missing} {name} documents lack embeddings'
+        missing = mongo.db[COLLECTION].count_documents({'embedding': {'$exists': False}})
+        assert missing == 0, f'{missing} documents lack embeddings'
 
     def test_embeddings_are_the_right_width(self, mongo):
-        doc = mongo.db.startups.find_one({'embedding': {'$exists': True}})
+        doc = mongo.db[COLLECTION].find_one({'embedding': {'$exists': True}})
         assert len(doc['embedding']) == 768
 
     def test_entities_were_extracted_for_every_document(self, mongo):
-        for name in ('startups', 'articles', 'github_repos'):
-            total = mongo.db[name].count_documents({})
-            with_entities = mongo.db[name].count_documents(
-                {'entities': {'$exists': True, '$ne': []}})
-            assert with_entities == total, (
-                f'{name}: only {with_entities}/{total} documents have entities')
+        total = mongo.db[COLLECTION].count_documents({})
+        with_entities = mongo.db[COLLECTION].count_documents(
+            {'entities': {'$exists': True, '$ne': []}})
+        assert with_entities == total, (
+            f'only {with_entities}/{total} documents have entities')
+
+    def test_entity_links_carry_a_type(self, mongo):
+        legacy = mongo.db.canonical_entities.count_documents(
+            {'mentioned_in.collection': {'$exists': True}})
+        assert legacy == 0, f'{legacy} entities still link by legacy collection name'
 
     def test_canonical_entities_exist_and_link_documents(self, mongo):
         total = mongo.db.canonical_entities.count_documents({})

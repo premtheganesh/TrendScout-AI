@@ -141,7 +141,7 @@ be overridden per process (`MONGODB_DB=... INDEX_DIR=... python ...`).
 ### Reproducing the evaluation
 
 The corpus the numbers above were measured on is committed as
-`data/eval/corpus_v1.jsonl` (857 records, no embeddings). Load it into its
+`data/eval/corpus_v2.jsonl` (857 records, no embeddings). Load it into its
 own database and index directory, then evaluate:
 
 ```bash
@@ -159,7 +159,7 @@ grows, because the evaluation never reads the live database.
 | Method | Endpoint                  | Purpose                                   |
 | ------ | ------------------------- | ----------------------------------------- |
 | `POST` | `/chat`                   | Question in, cited answer out             |
-| `POST` | `/search`                 | Hybrid search; toggle channels per request |
+| `POST` | `/search`                 | Hybrid search; filter by `type`, toggle channels |
 | `POST` | `/similar`                | "More like this" by embedding             |
 | `POST` | `/graph/query`            | Arbitrary Cypher                          |
 | `GET`  | `/graph/entities`         | Most-mentioned entities                   |
@@ -174,10 +174,36 @@ curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
 Search results carry the per-channel ranks that produced them
 (`"ranks": {"keyword": 1, "semantic": 3}`), so the ordering is explainable.
 
+## Corpus
+
+Every document lives in one MongoDB collection, `documents`, tagged with a
+`type`. The registry in `src/corpus/types.py` is the only place that knows
+which types exist; adding one means adding an entry there plus a rendering
+branch in `document_text.py`.
+
+| `type`    | Documents | Source                      |
+| --------- | --------- | --------------------------- |
+| `startup` | 140       | StartupSavant, Y Combinator |
+| `article` | 20        | TechCrunch RSS              |
+| `repo`    | 50        | GitHub API                  |
+| **total** | **210**   | 647 canonical entities      |
+
+Each document carries a stable `doc_key` (unique index — re-ingesting the
+same thing updates rather than duplicates), `event_at` (when the thing
+happened, a real datetime, or null when the source gives none), `first_seen_at`
+/ `last_seen_at`, and `content_hash` over exactly the text that gets indexed.
+
+83 entities appear in more than one document; those create the graph edges.
+In Neo4j: 857 nodes, 1,013 MENTIONS relationships.
+
 ## Layout
 
 ```
 src/
+  corpus/
+    types.py              document type registry (the only list of types)
+    identity.py           doc_key, canonical URLs, content_hash
+    dates.py              event_at / first_seen_at parsing
   search/
     hybrid_search.py      three-channel retrieval + RRF
     bm25_index.py         Okapi BM25 over the corpus
@@ -193,13 +219,14 @@ src/
   config.py               all settings, from .env / environment
 scripts/
   build_indexes.py        rebuild FAISS + BM25 into INDEX_DIR
+  migrate_to_documents.py one-time move from per-type collections (done)
   extract_entities.py     NER + canonical entity index
   evaluate_retrieval.py   metrics, ablations, weight sweep
   export_eval_corpus.py   freeze the corpus as a snapshot
   load_eval_corpus.py     load a snapshot into a separate database
   import_to_neo4j.py      push the graph to Neo4j
 data/eval/queries.json    labelled evaluation set
-data/eval/corpus_v1.jsonl frozen corpus the numbers were measured on
+data/eval/corpus_v2.jsonl frozen corpus the numbers were measured on
 tests/
 ```
 
@@ -214,18 +241,6 @@ plumbing, configuration, the evaluation snapshot) run with no database and
 no network. Tests marked `needs_mongo` / `needs_indexes` skip rather than
 fail when MongoDB or the indexes are missing; `pytest -m "not needs_mongo"`
 runs only the offline ones.
-
-## Corpus
-
-| Collection     | Documents | Source                       |
-| -------------- | --------- | ---------------------------- |
-| `startups`     | 140       | StartupSavant, Y Combinator  |
-| `articles`     | 20        | TechCrunch RSS               |
-| `github_repos` | 50        | GitHub API                   |
-| **total**      | **210**   | 647 canonical entities       |
-
-83 of those entities appear in more than one document; those create the
-graph edges. In Neo4j: 857 nodes, 1013 MENTIONS relationships.
 
 ## Stack
 

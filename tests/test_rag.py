@@ -13,8 +13,8 @@ class StubSearch:
         self.results = results if results is not None else []
         self.calls = []
 
-    def search(self, query, collection=None, filters=None, top_k=10, **kwargs):
-        self.calls.append({'query': query, 'collection': collection,
+    def search(self, query, doc_type=None, filters=None, top_k=10, **kwargs):
+        self.calls.append({'query': query, 'type': doc_type,
                            'filters': filters, 'top_k': top_k})
         return self.results
 
@@ -43,10 +43,10 @@ class StubLLM:
         return self.text_response
 
 
-def result(doc_id='d1', collection='startups', name='Suno', **extra):
+def result(doc_id='d1', doc_type='startup', name='Suno', **extra):
     return {
         'doc_id': doc_id,
-        'collection': collection,
+        'type': doc_type,
         'rrf_score': 0.032,
         'ranks': {'keyword': 1},
         'document': {'_id': doc_id, 'name': name,
@@ -84,17 +84,22 @@ class TestNormalizeCitations:
 class TestPlanQuery:
     def test_uses_the_models_plan(self):
         llm = StubLLM(json_response={'search_query': 'AI music',
-                                     'collection': 'startups',
+                                     'type': 'startup',
                                      'location': 'Boston'})
         plan = make_pipeline(llm=llm).plan_query('where is AI music in Boston?')
         assert plan == {'search_query': 'AI music',
-                        'collection': 'startups', 'location': 'Boston'}
+                        'type': 'startup', 'location': 'Boston'}
 
-    def test_rejects_an_invalid_collection(self):
+    def test_rejects_an_invalid_type(self):
         llm = StubLLM(json_response={'search_query': 'x',
-                                     'collection': 'not_a_collection',
+                                     'type': 'not_a_type',
                                      'location': None})
-        assert make_pipeline(llm=llm).plan_query('q')['collection'] is None
+        assert make_pipeline(llm=llm).plan_query('q')['type'] is None
+
+    def test_legacy_collection_name_from_the_model_is_mapped(self):
+        llm = StubLLM(json_response={'search_query': 'x',
+                                     'collection': 'github_repos'})
+        assert make_pipeline(llm=llm).plan_query('q')['type'] == 'repo'
 
     def test_falls_back_when_planner_raises(self):
         pipeline = make_pipeline(llm=StubLLM(fail_json=True))
@@ -111,27 +116,27 @@ class TestPlanQuery:
     def test_without_an_llm_the_question_is_used_verbatim(self):
         plan = make_pipeline(llm=None).plan_query('raw question')
         assert plan['search_query'] == 'raw question'
-        assert plan['collection'] is None
+        assert plan['type'] is None
 
 
 class TestRetrieve:
     def test_location_becomes_a_regex_filter(self):
         search = StubSearch(results=[result()])
         make_pipeline(search=search).retrieve(
-            {'search_query': 'q', 'collection': None, 'location': 'Boston'}, 5)
+            {'search_query': 'q', 'type': None, 'location': 'Boston'}, 5)
         assert search.calls[0]['filters'] == {
             'location': {'$regex': 'Boston', '$options': 'i'}}
 
     def test_no_filter_when_no_location(self):
         search = StubSearch(results=[result()])
         make_pipeline(search=search).retrieve(
-            {'search_query': 'q', 'collection': None, 'location': None}, 5)
+            {'search_query': 'q', 'type': None, 'location': None}, 5)
         assert search.calls[0]['filters'] is None
 
     def test_empty_filtered_result_retries_unfiltered(self):
         search = StubSearch(results=[])
         make_pipeline(search=search).retrieve(
-            {'search_query': 'q', 'collection': None, 'location': 'Atlantis'}, 5)
+            {'search_query': 'q', 'type': None, 'location': 'Atlantis'}, 5)
         assert len(search.calls) == 2
         assert search.calls[1]['filters'] is None
 
@@ -205,7 +210,7 @@ class TestAnswer:
     def test_end_to_end_shape(self):
         search = StubSearch(results=[result()])
         llm = StubLLM(json_response={'search_query': 'AI music',
-                                     'collection': 'startups'},
+                                     'type': 'startup'},
                       text_response='Suno makes AI music [1].')
         answer = make_pipeline(search=search, llm=llm).answer('q')
 

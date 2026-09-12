@@ -16,6 +16,8 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 
+from src.corpus.schema import ensure_indexes
+from src.corpus.types import COLLECTION, TYPE_NAMES
 from src.database.mongo_client import MongoDBClient
 from src.extractors.entity_extractor import EntityExtractor
 from src.search.document_text import document_text
@@ -25,8 +27,6 @@ logger = logging.getLogger(__name__)
 
 # The extractor logs one line per document, which buries the report.
 logging.getLogger('src.extractors.entity_extractor').setLevel(logging.WARNING)
-
-COLLECTIONS = ('startups', 'articles', 'github_repos')
 
 # Quantity labels make bad graph nodes: every document mentioning "one"
 # becomes a neighbour of every other.
@@ -80,13 +80,13 @@ def extract_for_documents(extractor, mongo, dry_run=False):
     now = datetime.now(timezone.utc).isoformat()
     stats = {}
 
-    for collection in COLLECTIONS:
-        docs = list(mongo.db[collection].find())
+    for doc_type in TYPE_NAMES:
+        docs = list(mongo.db[COLLECTION].find({'type': doc_type}))
         with_entities = 0
         total_entities = 0
 
         for doc in docs:
-            text = document_text(doc, collection)
+            text = document_text(doc, doc_type)
             if not text.strip():
                 continue
 
@@ -108,7 +108,7 @@ def extract_for_documents(extractor, mongo, dry_run=False):
                 total_entities += len(entities)
 
             if not dry_run:
-                mongo.db[collection].update_one(
+                mongo.db[COLLECTION].update_one(
                     {'_id': doc['_id']},
                     {'$set': {
                         'entities': entities,
@@ -116,8 +116,8 @@ def extract_for_documents(extractor, mongo, dry_run=False):
                     }}
                 )
 
-        stats[collection] = (with_entities, len(docs), total_entities)
-        print(f"  {collection:<15} {with_entities:>3}/{len(docs)} documents "
+        stats[doc_type] = (with_entities, len(docs), total_entities)
+        print(f"  {doc_type:<15} {with_entities:>3}/{len(docs)} documents "
               f"produced entities  ({total_entities} total)")
 
     return stats
@@ -137,32 +137,32 @@ def build_canonical_index(mongo, dry_run=False):
         'seen_docs': set(),
     })
 
-    for collection in COLLECTIONS:
-        for doc in mongo.db[collection].find({'entities': {'$exists': True}}):
-            doc_id = str(doc['_id'])
-            entities = doc.get('entities') or []
-            if isinstance(entities, str):
+    for doc in mongo.db[COLLECTION].find({'entities': {'$exists': True}}):
+        doc_id = str(doc['_id'])
+        doc_type = doc.get('type', '')
+        entities = doc.get('entities') or []
+        if isinstance(entities, str):
+            continue
+
+        for ent in entities:
+            name = ent.get('entity_text')
+            etype = ent.get('entity_type')
+            if not name or not etype:
                 continue
 
-            for ent in entities:
-                name = ent.get('entity_text')
-                etype = ent.get('entity_type')
-                if not name or not etype:
-                    continue
+            key = (name.casefold(), etype)
+            bucket = grouped[key]
+            bucket['surface_forms'][name] += 1
+            bucket['entity_type'] = etype
+            bucket['mention_count'] += ent.get('count', 1)
 
-                key = (name.casefold(), etype)
-                bucket = grouped[key]
-                bucket['surface_forms'][name] += 1
-                bucket['entity_type'] = etype
-                bucket['mention_count'] += ent.get('count', 1)
-
-                # One edge per document, however often it is mentioned.
-                if doc_id not in bucket['seen_docs']:
-                    bucket['seen_docs'].add(doc_id)
-                    bucket['mentioned_in'].append({
-                        'doc_id': doc_id,
-                        'collection': collection,
-                    })
+            # One edge per document, however often it is mentioned.
+            if doc_id not in bucket['seen_docs']:
+                bucket['seen_docs'].add(doc_id)
+                bucket['mentioned_in'].append({
+                    'doc_id': doc_id,
+                    'type': doc_type,
+                })
 
     now = datetime.now(timezone.utc).isoformat()
     records = []
@@ -188,8 +188,7 @@ def build_canonical_index(mongo, dry_run=False):
         mongo.db.canonical_entities.delete_many({})
         if records:
             mongo.db.canonical_entities.insert_many(records)
-        mongo.db.canonical_entities.create_index('entity_text')
-        mongo.db.canonical_entities.create_index('mentioned_in.doc_id')
+        ensure_indexes(mongo.db)
         print(f"  Wrote {len(records)} entities to canonical_entities")
 
     print("\n  Top connecting entities:")

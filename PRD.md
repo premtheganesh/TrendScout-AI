@@ -3,7 +3,7 @@
 Living document. Updated at the end of every phase with what was built,
 what changed from the plan, and the measured numbers.
 
-Last updated: 2026-09-12 (Phase 1)
+Last updated: 2026-09-12 (Phase 2)
 
 ---
 
@@ -64,7 +64,7 @@ Known problems this project fixes:
 - YC scraper pinned to 2025 batches and fragile CSS classes; GitHub query
   returns the same all-time-top repos every run; TechCrunch feed holds 20 items.
 - No pipeline runner, run log or scheduler; Neo4j import blocks on `input()`.
-- API loads indexes once with no reload; collection names hardcoded in ~15 files.
+- API loads indexes once with no reload; ~~collection names hardcoded in ~15 files~~ (fixed in Phase 2: one registry).
 - `/graph/query` runs arbitrary Cypher unauthenticated; `/search` forwards a
   raw MongoDB filter from the client; CORS is `*`; endpoints are `async def`
   around blocking calls.
@@ -174,7 +174,7 @@ this file.
 |---|---|---|
 | 0 | PRD, backup, cleanup, rename | ✅ done 2026-09-12 |
 | 1 | Config + frozen evaluation corpus | ✅ done 2026-09-12 |
-| 2 | Unified `documents` collection | ⬜ |
+| 2 | Unified `documents` collection | ✅ done 2026-09-12 |
 | 3 | Ingestion framework + first 3 sources | ⬜ |
 | 4 | Incremental processing + scheduling | ⬜ |
 | 5 | Remaining sources | ⬜ |
@@ -240,3 +240,28 @@ Acceptance:
 Deviations from plan: none. Extra: `tests/test_eval_corpus.py` checks the
 snapshot's counts, that no embeddings leaked in, that every entity link
 resolves, and that every label in `queries.json` still matches a title.
+
+### Phase 2 — Unified `documents` collection (2026-09-12)
+
+Planned:
+- [x] `src/corpus/types.py` registry — the only list of document types (`startup`, `article`, `repo`), with human label, Neo4j label, planner hint and legacy collection name
+- [x] `src/corpus/identity.py` (`doc_key`, `canonical_url`, `name_key`, `content_hash`) and `src/corpus/dates.py` (`parse_datetime`, `event_at_for`, `first_seen_for`) — reused by ingestion in Phase 3
+- [x] `scripts/migrate_to_documents.py`: dry-run by default, `--apply`, `--force`, `--drop-legacy`; refuses on key collisions; verifies counts and dangling links before dropping anything. `_id`s preserved.
+- [x] Migrated: 210 documents (140/20/50), `event_at` set on all 70 articles and repos (startups have no launch date in the scraped data — stays null by design), 647 entity links rewritten to `{doc_id, type}`, 0 dangling; legacy collections dropped after verification
+- [x] All hardcoded collection references replaced: `bm25_index`, `graph_expansion` (+ Neo4j label map), `hybrid_search`, `rag/pipeline` (planner prompt now generated from the registry; still accepts legacy names from the model), `api/main`, `build_indexes`, `extract_entities`, `evaluate_retrieval`, `import_to_neo4j` + `setup_neo4j_schema` (rewritten generically, `--fresh`/`--yes`, no `input()`), `ui/app`, tests
+- [x] API contract: `collection` → `type` on `/search` request/results, `/chat` sources and `/similar`; unknown type → 422; `/stats` returns `documents.total` + `documents.by_type`
+- [x] Deleted dead code: `src/schemas/*`, `src/llm/normalizer.py`; `scripts/remove_duplicates.py` (moved up from Phase 3 — the unique `doc_key` index makes it moot now)
+- [x] Eval snapshot re-exported in the new shape as `corpus_v2.jsonl` (v1 removed); loader ensures the corpus indexes
+- [x] Tests: 182 passed (147 → +21 registry/identity/dates, +5 legacy-name tolerance, +2 `/similar`, +7 corpus integrity rewritten)
+
+Acceptance:
+- Evaluation on the migrated live corpus **and** on a fresh load of `corpus_v2.jsonl`: identical to Phase 1 on every row (nDCG@10 0.743 / 0.882 / 0.881 / 0.794 / 0.881)
+- `grep -rn "'github_repos'" src/ scripts/` → only the registry (and the old scrapers' write helpers in `mongo_client.py`, replaced in Phase 3)
+- "AI music generation" still returns Suno in the top 5 (`test_known_query_finds_the_obvious_document`)
+- Real API smoke test: `/stats` by type, `/search` with `type=repo`, bad type → 422, `/similar` hydrated
+
+Deviations from plan:
+- `remove_duplicates.py` deleted here rather than in Phase 3 (its precondition, the unique key, landed now).
+- Found and fixed a pre-existing bug: `/similar` had never returned a valid response (bare hits failed the response model). Now hydrated, with tests.
+- Removing `stars` from repo text (so weekly star ticks don't force re-embeds) was deferred to Phase 4, where `content_hash` starts driving re-processing — doing it here would have changed the eval numbers this phase is supposed to hold constant.
+- Neo4j import/schema scripts were rewritten but **not executed**: Neo4j Desktop's database was not running. Verified on the first Neo4j run in Phase 4.

@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Dict, Optional, Any
 import logging
 
+from src.corpus.types import COLLECTION, TYPE_NAMES
+from src.search.document_text import document_title, document_url
 from src.search.hybrid_search import HybridSearchEngine
 from src.database.neo4j_client import Neo4jClient
 from src.embeddings.embedding_generator import EmbeddingGenerator
@@ -125,14 +127,13 @@ class SearchRequest(BaseModel):
     """
     Request model for /search endpoint
 
-    This defines what data the endpoint expects:
     - query: required string
-    - collection: optional string
-    - filters: optional dictionary
+    - type: optional document type (startup, article, repo)
+    - filters: optional MongoDB filter on document fields
     - top_k: optional int with default value 10
     """
     query: str
-    collection: Optional[str] = None
+    type: Optional[str] = None
     filters: Optional[Dict] = None
     top_k: int = 10
     use_keyword: bool = True      # BM25 lexical channel
@@ -142,7 +143,7 @@ class SearchRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "query": "AI music generation startup",
-            "collection": "startups",
+            "type": "startup",
             "top_k": 5
         }
     })
@@ -155,7 +156,7 @@ class SearchResult(BaseModel):
     `ranks` gives this document's position in each channel that found it.
     """
     doc_id: str
-    collection: str
+    type: str
     rrf_score: Optional[float] = None
     ranks: Optional[Dict] = None
     channel_scores: Optional[Dict] = None
@@ -184,7 +185,7 @@ class ChatSource(BaseModel):
     """One cited source backing an answer"""
     n: int
     doc_id: str
-    collection: str
+    type: str
     title: str
     url: str = ""
     snippet: str = ""
@@ -206,13 +207,11 @@ class ChatResponse(BaseModel):
 class SimilarDocRequest(BaseModel):
     """Request for finding similar documents"""
     doc_id: str
-    collection: str
     top_k: int = 5
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "doc_id": "507f1f77bcf86cd799439011",
-            "collection": "startups",
             "top_k": 5
         }
     })
@@ -283,11 +282,16 @@ async def hybrid_search(request: SearchRequest):
     """
 
     try:
-        logger.info(f"Search request: query='{request.query}', collection={request.collection}")
+        if request.type is not None and request.type not in TYPE_NAMES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"type must be one of {list(TYPE_NAMES)}")
+
+        logger.info(f"Search request: query='{request.query}', type={request.type}")
 
         results = search_engine.search(
             query=request.query,
-            collection=request.collection,
+            doc_type=request.type,
             filters=request.filters,
             top_k=request.top_k,
             use_keyword=request.use_keyword,
@@ -299,8 +303,9 @@ async def hybrid_search(request: SearchRequest):
 
         return results
 
+    except HTTPException:
+        raise
     except Exception as e:
-        # HTTPException returns proper HTTP error codes
         logger.error(f"Search error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -349,10 +354,7 @@ async def find_similar_documents(request: SimilarDocRequest):
     try:
         from bson import ObjectId
 
-        # Get the source document
-        doc = search_engine.mongo.db[request.collection].find_one(
-            {'_id': ObjectId(request.doc_id)}
-        )
+        doc = search_engine.documents.find_one({'_id': ObjectId(request.doc_id)})
 
         if not doc:
             # 404 error for "not found"
@@ -364,19 +366,35 @@ async def find_similar_documents(request: SimilarDocRequest):
         if not description:
             raise HTTPException(status_code=400, detail="Document has no text content")
 
-        # Search for similar documents
-        results = search_engine.semantic_search(
+        # Same type as the source document, +1 because the first hit is itself
+        hits = search_engine.semantic_search(
             query=description,
-            collection=request.collection,
-            top_k=request.top_k + 1  # +1 because first result is itself
+            doc_type=doc.get('type'),
+            top_k=request.top_k + 1
         )
+        hits = [h for h in hits if h['doc_id'] != request.doc_id][:request.top_k]
 
-        # Filter out source document
-        filtered_results = [r for r in results if r['doc_id'] != request.doc_id][:request.top_k]
+        # semantic_search returns bare hits; the response model wants the
+        # hydrated shape /search returns.
+        documents = search_engine._fetch_documents([h['doc_id'] for h in hits])
+        results = []
+        for hit in hits:
+            hydrated = documents.get(hit['doc_id'])
+            if hydrated is None:
+                continue
+            results.append({
+                'doc_id': hit['doc_id'],
+                'type': hit['type'],
+                'rrf_score': None,
+                'ranks': {'semantic': len(results) + 1},
+                'channel_scores': {'semantic': hit['score']},
+                'title': document_title(hydrated, hit['type']),
+                'url': document_url(hydrated, hit['type']),
+                'document': hydrated,
+            })
 
-        logger.info(f"Found {len(filtered_results)} similar documents")
-
-        return filtered_results
+        logger.info(f"Found {len(results)} similar documents")
+        return results
 
     except HTTPException:
         raise
@@ -529,10 +547,10 @@ async def get_statistics():
     """
 
     try:
-        # MongoDB counts
-        startup_count = search_engine.mongo.db.startups.count_documents({})
-        article_count = search_engine.mongo.db.articles.count_documents({})
-        repo_count = search_engine.mongo.db.github_repos.count_documents({})
+        by_type = {name: 0 for name in TYPE_NAMES}
+        for row in search_engine.documents.aggregate(
+                [{'$group': {'_id': '$type', 'n': {'$sum': 1}}}]):
+            by_type[row['_id'] or 'unknown'] = row['n']
 
         # FAISS index size
         faiss_count = search_engine.faiss_index.ntotal
@@ -556,11 +574,9 @@ async def get_statistics():
                 logger.warning(f"Neo4j stats failed: {neo4j_err}")
 
         return {
-            "mongodb": {
-                "startups": startup_count,
-                "articles": article_count,
-                "repos": repo_count,
-                "total_documents": startup_count + article_count + repo_count
+            "documents": {
+                "total": sum(by_type.values()),
+                "by_type": by_type,
             },
             "neo4j": neo4j_stats,
             "embeddings": {

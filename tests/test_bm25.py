@@ -44,8 +44,11 @@ class FakeCollection:
 
 
 class FakeMongo:
+    """Documents of every type live in one collection, tagged by `type`."""
     def __init__(self, data):
-        self.db = {name: FakeCollection(docs) for name, docs in data.items()}
+        docs = [{**doc, 'type': doc_type}
+                for doc_type, group in data.items() for doc in group]
+        self.db = {'documents': FakeCollection(docs)}
 
 
 @pytest.fixture
@@ -56,7 +59,7 @@ def index():
     ranking rather than a degenerate IDF.
     """
     mongo = FakeMongo({
-        'startups': [
+        'startup': [
             {'_id': 's1', 'name': 'Suno',
              'description': 'AI music generation platform',
              'location': 'Cambridge, Massachusetts'},
@@ -73,13 +76,13 @@ def index():
              'description': 'Enterprise language model provider',
              'location': 'Toronto, Canada'},
         ],
-        'articles': [
+        'article': [
             {'_id': 'a1', 'title': 'Music startup raises funding',
              'description': 'A song generation company raised money'},
             {'_id': 'a2', 'title': 'Chip demand climbs',
              'description': 'Semiconductor supply remains constrained'},
         ],
-        'github_repos': [
+        'repo': [
             {'_id': 'r1', 'full_name': 'langchain-ai/langchain',
              'description': 'Framework for LLM agents',
              'primary_language': 'Python'},
@@ -95,9 +98,9 @@ def index():
 
 
 class TestBM25Index:
-    def test_indexes_every_collection(self, index):
+    def test_indexes_every_type(self, index):
         assert len(index) == 10
-        assert set(index.collections) == {'startups', 'articles', 'github_repos'}
+        assert set(index.types) == {'startup', 'article', 'repo'}
 
     def test_exact_term_ranks_first(self, index):
         results = index.search('Suno')
@@ -115,10 +118,10 @@ class TestBM25Index:
         assert all(r['score'] > 0 for r in results)
         assert 'r1' not in [r['doc_id'] for r in results]
 
-    def test_collection_filter(self, index):
-        results = index.search('music startup funding', collection='articles')
+    def test_type_filter(self, index):
+        results = index.search('music startup funding', doc_type='article')
         assert results
-        assert all(r['collection'] == 'articles' for r in results)
+        assert all(r['type'] == 'article' for r in results)
 
     def test_allowed_ids_restricts_before_truncation(self, index):
         results = index.search('music song generation', allowed_ids={'a1'})
@@ -157,6 +160,6 @@ class TestBM25Index:
             BM25Index.load(str(tmp_path / 'nope.pkl'))
 
     def test_empty_corpus_raises(self):
-        mongo = FakeMongo({'startups': [], 'articles': [], 'github_repos': []})
+        mongo = FakeMongo({'startup': [], 'article': [], 'repo': []})
         with pytest.raises(ValueError, match='No documents'):
             BM25Index().build(mongo)

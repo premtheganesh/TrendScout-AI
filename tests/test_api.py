@@ -25,7 +25,7 @@ def stub_llm(client):
     class StubLLM:
         model = 'stub'
         def generate_json(self, prompt, system_prompt=None, temperature=0.0):
-            return {'search_query': 'AI music', 'collection': 'startups',
+            return {'search_query': 'AI music', 'type': 'startup',
                     'location': None}
         def generate(self, prompt, system_prompt=None, temperature=0.0,
                      max_tokens=2048, reasoning_effort=None):
@@ -59,16 +59,20 @@ class TestSearchEndpoint:
     def test_response_shape(self, client):
         result = client.post('/search',
                              json={'query': 'AI startup', 'top_k': 1}).json()[0]
-        for field in ('doc_id', 'collection', 'rrf_score', 'ranks',
+        for field in ('doc_id', 'type', 'rrf_score', 'ranks',
                       'title', 'document'):
             assert field in result
 
-    def test_collection_filter(self, client):
+    def test_type_filter(self, client):
         results = client.post('/search', json={
-            'query': 'framework', 'collection': 'github_repos', 'top_k': 5,
+            'query': 'framework', 'type': 'repo', 'top_k': 5,
         }).json()
         assert results
-        assert all(r['collection'] == 'github_repos' for r in results)
+        assert all(r['type'] == 'repo' for r in results)
+
+    def test_unknown_type_is_rejected(self, client):
+        response = client.post('/search', json={'query': 'x', 'type': 'podcasts'})
+        assert response.status_code == 422
 
     def test_channels_can_be_toggled(self, client):
         results = client.post('/search', json={
@@ -87,6 +91,21 @@ class TestSearchEndpoint:
         response = client.post('/search',
                                json={'query': 'x', 'top_k': 'five'})
         assert response.status_code == 422
+
+
+class TestSimilarEndpoint:
+    def test_returns_hydrated_documents_of_the_same_type(self, client):
+        seed = client.post('/search', json={'query': 'Suno', 'top_k': 1}).json()[0]
+        results = client.post('/similar', json={'doc_id': seed['doc_id'],
+                                                'top_k': 3}).json()
+        assert 0 < len(results) <= 3
+        assert all(r['doc_id'] != seed['doc_id'] for r in results)
+        assert all(r['type'] == seed['type'] for r in results)
+        assert all(r['document'] and r['title'] for r in results)
+
+    def test_unknown_document_is_404(self, client):
+        response = client.post('/similar', json={'doc_id': '000000000000000000000000'})
+        assert response.status_code == 404
 
 
 class TestChatEndpoint:
@@ -128,7 +147,8 @@ class TestChatEndpoint:
 class TestStatsEndpoint:
     def test_reports_corpus_and_index_size(self, client):
         stats = client.get('/stats').json()
-        assert stats['mongodb']['total_documents'] > 0
+        assert stats['documents']['total'] > 0
+        assert set(stats['documents']['by_type']) >= {'startup', 'article', 'repo'}
         assert stats['embeddings']['dimension'] == 768
 
     def test_neo4j_status_is_reported_not_fatal(self, client):

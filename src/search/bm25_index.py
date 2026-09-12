@@ -1,4 +1,4 @@
-"""Okapi BM25 lexical index over the MongoDB corpus."""
+"""Okapi BM25 lexical index over the document corpus."""
 
 import os
 import pickle
@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 from rank_bm25 import BM25Okapi
 
 from src.config import get_settings
+from src.corpus.types import COLLECTION
 from src.search.document_text import document_text
 
 logger = logging.getLogger(__name__)
@@ -40,36 +41,34 @@ def tokenize(text: str) -> List[str]:
 
 
 class BM25Index:
-    COLLECTIONS = ('startups', 'articles', 'github_repos')
-
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
         self.b = b
         self.bm25: Optional[BM25Okapi] = None
         self.doc_ids: List[str] = []
-        self.collections: List[str] = []
+        self.types: List[str] = []
         self.titles: List[str] = []
 
     def build(self, mongo) -> "BM25Index":
         from src.search.document_text import document_title
 
         corpus_tokens: List[List[str]] = []
-        self.doc_ids, self.collections, self.titles = [], [], []
+        self.doc_ids, self.types, self.titles = [], [], []
 
-        for collection in self.COLLECTIONS:
-            for doc in mongo.db[collection].find():
-                text = document_text(doc, collection)
-                if not text.strip():
-                    continue
-                corpus_tokens.append(tokenize(text))
-                self.doc_ids.append(str(doc['_id']))
-                self.collections.append(collection)
-                self.titles.append(document_title(doc, collection))
+        for doc in mongo.db[COLLECTION].find():
+            doc_type = doc.get('type', '')
+            text = document_text(doc, doc_type)
+            if not text.strip():
+                continue
+            corpus_tokens.append(tokenize(text))
+            self.doc_ids.append(str(doc['_id']))
+            self.types.append(doc_type)
+            self.titles.append(document_title(doc, doc_type))
 
         if not corpus_tokens:
             raise ValueError(
                 "No documents found to index. Is MongoDB populated? "
-                "Run the scrapers first."
+                "Run the ingestion first."
             )
 
         self.bm25 = BM25Okapi(corpus_tokens, k1=self.k1, b=self.b)
@@ -88,7 +87,7 @@ class BM25Index:
             pickle.dump({
                 'bm25': self.bm25,
                 'doc_ids': self.doc_ids,
-                'collections': self.collections,
+                'types': self.types,
                 'titles': self.titles,
                 'k1': self.k1,
                 'b': self.b,
@@ -107,10 +106,16 @@ class BM25Index:
         with open(path, 'rb') as f:
             state = pickle.load(f)
 
+        if 'types' not in state:
+            raise ValueError(
+                f"BM25 index at {path} predates the unified documents "
+                "collection. Run: python scripts/build_indexes.py"
+            )
+
         index = cls(k1=state.get('k1', 1.5), b=state.get('b', 0.75))
         index.bm25 = state['bm25']
         index.doc_ids = state['doc_ids']
-        index.collections = state['collections']
+        index.types = state['types']
         index.titles = state['titles']
         logger.info(f"Loaded BM25 index with {len(index.doc_ids)} documents")
         return index
@@ -118,7 +123,7 @@ class BM25Index:
     def search(
         self,
         query: str,
-        collection: str = None,
+        doc_type: str = None,
         top_k: int = 20,
         allowed_ids: set = None
     ) -> List[Dict]:
@@ -127,7 +132,7 @@ class BM25Index:
 
         Args:
             query: the search query
-            collection: restrict to one collection
+            doc_type: restrict to one document type
             top_k: results to return
             allowed_ids: if given, only these doc_ids are eligible
 
@@ -140,9 +145,9 @@ class BM25Index:
         documents are never seen. BM25 already scores every document, so
         filtering inside this loop costs nothing and loses nothing.
 
-        Returns dicts of {doc_id, collection, score, title} — deliberately
-        NOT the full document. Hydrating from MongoDB is the caller's job,
-        so a fused ranking only fetches the documents it actually keeps.
+        Returns dicts of {doc_id, type, score, title} — deliberately NOT
+        the full document. Hydrating from MongoDB is the caller's job, so a
+        fused ranking only fetches the documents it actually keeps.
         """
         if self.bm25 is None:
             raise RuntimeError("BM25 index is not built or loaded.")
@@ -157,13 +162,13 @@ class BM25Index:
         for i, score in enumerate(scores):
             if score <= 0:
                 continue
-            if collection and self.collections[i] != collection:
+            if doc_type and self.types[i] != doc_type:
                 continue
             if allowed_ids is not None and self.doc_ids[i] not in allowed_ids:
                 continue
             ranked.append({
                 'doc_id': self.doc_ids[i],
-                'collection': self.collections[i],
+                'type': self.types[i],
                 'score': float(score),
                 'title': self.titles[i],
             })

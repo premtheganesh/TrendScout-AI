@@ -108,9 +108,9 @@ def render_sources(sources: list, key_prefix: str):
                 title = src.get("title", "Untitled")
                 url = src.get("url", "")
                 if url:
-                    st.markdown(f"**[{title}]({url})**  ·  `{src.get('collection','')}`")
+                    st.markdown(f"**[{title}]({url})**  ·  `{src.get('type','')}`")
                 else:
-                    st.markdown(f"**{title}**  ·  `{src.get('collection','')}`")
+                    st.markdown(f"**{title}**  ·  `{src.get('type','')}`")
 
                 snippet = src.get("snippet", "")
                 if snippet:
@@ -197,8 +197,8 @@ if page == "Ask":
                     bits = []
                     if plan.get("search_query"):
                         bits.append(f"searched `{plan['search_query']}`")
-                    if plan.get("collection"):
-                        bits.append(f"in `{plan['collection']}`")
+                    if plan.get("type"):
+                        bits.append(f"in `{plan['type']}`")
                     if plan.get("location"):
                         bits.append(f"filtered to `{plan['location']}`")
                     if bits:
@@ -228,9 +228,9 @@ elif page == "Search":
     with col1:
         query = st.text_input("Search query", placeholder="e.g. AI music generation startup")
     with col2:
-        collection = st.selectbox(
-            "Collection",
-            ["All", "startups", "articles", "github_repos"],
+        doc_type = st.selectbox(
+            "Type",
+            ["All", "startup", "article", "repo"],
         )
 
     with st.expander("Advanced options"):
@@ -251,7 +251,7 @@ elif page == "Search":
             with st.spinner("Searching…"):
                 payload = {
                     "query": query,
-                    "collection": None if collection == "All" else collection,
+                    "type": None if doc_type == "All" else doc_type,
                     "top_k": top_k,
                     "use_keyword": use_keyword,
                     "use_semantic": use_semantic,
@@ -269,7 +269,7 @@ elif page == "Search":
                         name = doc.get("name") or doc.get("title") or doc.get("repo_name") or "Untitled"
                         desc = doc.get("description") or doc.get("summary") or doc.get("content", "")
                         score = r.get("rrf_score")
-                        coll = r.get("collection", "")
+                        coll = r.get("type", "")
                         doc_id = r.get("doc_id", "")
 
                         with st.expander(f"{i}. {name}  —  `{coll}`  {'·  Score: {:.4f}'.format(score) if score else ''}"):
@@ -294,14 +294,14 @@ elif page == "Search":
                             # "More like this" button
                             if st.button("Find similar", key=f"sim_{i}"):
                                 with st.spinner("Finding similar documents…"):
-                                    sim_payload = {"doc_id": doc_id, "collection": coll, "top_k": 5}
+                                    sim_payload = {"doc_id": doc_id, "top_k": 5}
                                     similar = api_post("/similar", sim_payload)
                                 if similar:
                                     st.write("**Similar documents:**")
                                     for s in similar:
                                         sdoc = s.get("document", {})
                                         sname = sdoc.get("name") or sdoc.get("title") or sdoc.get("repo_name") or "Untitled"
-                                        st.write(f"- {sname} (`{s.get('collection')}`)")
+                                        st.write(f"- {sname} (`{s.get('type')}`)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -408,17 +408,18 @@ elif page == "Statistics":
             data = api_get("/stats")
 
         if data:
-            mongo = data.get("mongodb", {})
+            docs = data.get("documents", {})
+            by_type = docs.get("by_type", {})
             neo4j = data.get("neo4j", {})
             emb = data.get("embeddings", {})
 
             # ── Row 1: MongoDB ────────────────────────────────────────────────
             st.subheader("MongoDB (Document Store)")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Startups", mongo.get("startups", 0))
-            c2.metric("Articles", mongo.get("articles", 0))
-            c3.metric("GitHub Repos", mongo.get("repos", 0))
-            c4.metric("Total Documents", mongo.get("total_documents", 0))
+            c1.metric("Startups", by_type.get("startup", 0))
+            c2.metric("Articles", by_type.get("article", 0))
+            c3.metric("GitHub Repos", by_type.get("repo", 0))
+            c4.metric("Total Documents", docs.get("total", 0))
 
             st.divider()
 
@@ -447,8 +448,8 @@ elif page == "Statistics":
             st.divider()
             st.subheader("Data breakdown")
             breakdown = {
-                "Startups": mongo.get("startups", 0),
-                "Articles": mongo.get("articles", 0),
-                "GitHub Repos": mongo.get("repos", 0),
+                "Startups": by_type.get("startup", 0),
+                "Articles": by_type.get("article", 0),
+                "GitHub Repos": by_type.get("repo", 0),
             }
             st.bar_chart(pd.Series(breakdown))

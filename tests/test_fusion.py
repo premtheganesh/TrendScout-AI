@@ -17,8 +17,8 @@ class StubEngine:
     reciprocal_rank_fusion = HybridSearchEngine.reciprocal_rank_fusion
 
 
-def hit(doc_id, collection='startups', score=1.0, **extra):
-    return {'doc_id': doc_id, 'collection': collection, 'score': score, **extra}
+def hit(doc_id, doc_type='startup', score=1.0, **extra):
+    return {'doc_id': doc_id, 'type': doc_type, 'score': score, **extra}
 
 
 class TestRRF:
@@ -85,12 +85,12 @@ class TestRRF:
         })
         assert fused[0]['shared_entities'] == ['OpenAI']
 
-    def test_collection_recovered_from_any_channel(self):
+    def test_type_recovered_from_any_channel(self):
         fused = StubEngine().reciprocal_rank_fusion({
-            'graph': [hit('x', collection='')],
-            'keyword': [hit('x', collection='articles')],
+            'graph': [hit('x', doc_type='')],
+            'keyword': [hit('x', doc_type='article')],
         })
-        assert fused[0]['collection'] == 'articles'
+        assert fused[0]['type'] == 'article'
 
     def test_empty_input(self):
         assert StubEngine().reciprocal_rank_fusion({}) == []

@@ -20,6 +20,7 @@ import numpy as np
 from bson import ObjectId
 
 from src.config import get_settings
+from src.corpus.types import COLLECTION
 from src.database.mongo_client import MongoDBClient
 from src.embeddings.embedding_generator import EmbeddingGenerator
 from src.search.bm25_index import BM25Index
@@ -79,6 +80,12 @@ class HybridSearchEngine:
                 f"{self.generator.dimension}-dim vectors. Rebuild the index."
             )
 
+        if self.faiss_metadata['metadata'] and 'type' not in self.faiss_metadata['metadata'][0]:
+            raise ValueError(
+                f"FAISS metadata at {metadata_path} predates the unified "
+                "documents collection. Run: python scripts/build_indexes.py"
+            )
+
         self.bm25 = BM25Index.load(os.path.join(self.index_dir, 'bm25_index.pkl'))
         self.graph = GraphExpander(self.mongo, neo4j_client=neo4j_client)
 
@@ -86,6 +93,10 @@ class HybridSearchEngine:
             f"Ready - {self.faiss_index.ntotal} dense vectors, "
             f"{len(self.bm25)} BM25 documents"
         )
+
+    @property
+    def documents(self):
+        return self.mongo.db[COLLECTION]
 
     def _clean_document(self, doc: Optional[Dict]) -> Optional[Dict]:
         if doc is None:
@@ -96,27 +107,25 @@ class HybridSearchEngine:
         cleaned.pop('embedding', None)
         return cleaned
 
-    def _fetch_documents(self, refs: List[tuple]) -> Dict[str, Dict]:
-        """One query per collection rather than one per document."""
-        by_collection: Dict[str, List[ObjectId]] = {}
-        for doc_id, collection in refs:
-            if not collection:
-                continue
+    def _fetch_documents(self, doc_ids: List[str]) -> Dict[str, Dict]:
+        """One query for the whole fused list rather than one per document."""
+        object_ids = []
+        for doc_id in doc_ids:
             try:
-                by_collection.setdefault(collection, []).append(ObjectId(doc_id))
+                object_ids.append(ObjectId(doc_id))
             except Exception:
                 continue
-
-        fetched: Dict[str, Dict] = {}
-        for collection, ids in by_collection.items():
-            for doc in self.mongo.db[collection].find({'_id': {'$in': ids}}):
-                fetched[str(doc['_id'])] = self._clean_document(doc)
-        return fetched
+        if not object_ids:
+            return {}
+        return {
+            str(doc['_id']): self._clean_document(doc)
+            for doc in self.documents.find({'_id': {'$in': object_ids}})
+        }
 
     def keyword_search(
         self,
         query: str,
-        collection: str = None,
+        doc_type: str = None,
         filters: Dict = None,
         top_k: int = 20
     ) -> List[Dict]:
@@ -126,29 +135,27 @@ class HybridSearchEngine:
         """
         allowed = None
         if filters:
-            allowed = self._ids_matching_filters(filters, collection)
+            allowed = self._ids_matching_filters(filters, doc_type)
             if not allowed:
                 return []
 
         return self.bm25.search(
             query,
-            collection=collection,
+            doc_type=doc_type,
             top_k=top_k,
             allowed_ids=allowed,
         )
 
-    def _ids_matching_filters(self, filters: Dict, collection: str = None) -> set:
-        collections = [collection] if collection else list(BM25Index.COLLECTIONS)
-        allowed = set()
-        for coll in collections:
-            for doc in self.mongo.db[coll].find(filters, {'_id': 1}):
-                allowed.add(str(doc['_id']))
-        return allowed
+    def _ids_matching_filters(self, filters: Dict, doc_type: str = None) -> set:
+        query = dict(filters)
+        if doc_type:
+            query['type'] = doc_type
+        return {str(doc['_id']) for doc in self.documents.find(query, {'_id': 1})}
 
     def semantic_search(
         self,
         query: str,
-        collection: str = None,
+        doc_type: str = None,
         top_k: int = 20,
         filters: Dict = None
     ) -> List[Dict]:
@@ -160,11 +167,11 @@ class HybridSearchEngine:
 
         allowed_ids = None
         if filters:
-            allowed_ids = self._ids_matching_filters(filters, collection)
+            allowed_ids = self._ids_matching_filters(filters, doc_type)
             if not allowed_ids:
                 return []
 
-        if collection or filters:
+        if doc_type or filters:
             search_k = self.faiss_index.ntotal
         else:
             search_k = min(top_k, self.faiss_index.ntotal)
@@ -176,16 +183,16 @@ class HybridSearchEngine:
                 continue
             doc_id = self.faiss_metadata['ids'][idx]
             meta = self.faiss_metadata['metadata'][idx]
-            doc_collection = meta.get('collection', '')
+            hit_type = meta.get('type', '')
 
-            if collection and doc_collection != collection:
+            if doc_type and hit_type != doc_type:
                 continue
             if allowed_ids is not None and doc_id not in allowed_ids:
                 continue
 
             results.append({
                 'doc_id': doc_id,
-                'collection': doc_collection,
+                'type': hit_type,
                 'score': float(score),
             })
             if len(results) >= top_k:
@@ -207,7 +214,7 @@ class HybridSearchEngine:
                 doc_id = result['doc_id']
                 entry = combined.setdefault(doc_id, {
                     'doc_id': doc_id,
-                    'collection': result.get('collection', ''),
+                    'type': result.get('type', ''),
                     'rrf_score': 0.0,
                     'ranks': {},
                     'channel_scores': {},
@@ -218,8 +225,8 @@ class HybridSearchEngine:
                 entry['channel_scores'][channel_name] = result.get('score', 0.0)
                 if result.get('shared_entities'):
                     entry['shared_entities'] = result['shared_entities']
-                if not entry['collection']:
-                    entry['collection'] = result.get('collection', '')
+                if not entry['type']:
+                    entry['type'] = result.get('type', '')
 
         fused = list(combined.values())
         fused.sort(key=lambda r: r['rrf_score'], reverse=True)
@@ -228,7 +235,7 @@ class HybridSearchEngine:
     def search(
         self,
         query: str,
-        collection: str = None,
+        doc_type: str = None,
         filters: Dict = None,
         top_k: int = 10,
         use_keyword: bool = True,
@@ -249,16 +256,16 @@ class HybridSearchEngine:
         if not query or not query.strip():
             return []
 
-        logger.info(f"Searching: '{query}' (collection={collection})")
+        logger.info(f"Searching: '{query}' (type={doc_type})")
         channels: Dict[str, List[Dict]] = {}
 
         if use_keyword:
             channels['keyword'] = self.keyword_search(
-                query, collection, filters, top_k=candidates_per_channel)
+                query, doc_type, filters, top_k=candidates_per_channel)
 
         if use_semantic:
             channels['semantic'] = self.semantic_search(
-                query, collection, top_k=candidates_per_channel, filters=filters)
+                query, doc_type, top_k=candidates_per_channel, filters=filters)
 
         if use_graph:
             seeds: List[str] = []
@@ -267,10 +274,10 @@ class HybridSearchEngine:
             seeds = list(dict.fromkeys(seeds))
 
             graph_hits = self.graph.expand(
-                seeds, collection=collection, top_k=candidates_per_channel)
+                seeds, doc_type=doc_type, top_k=candidates_per_channel)
 
             if filters and graph_hits:
-                allowed = self._ids_matching_filters(filters, collection)
+                allowed = self._ids_matching_filters(filters, doc_type)
                 graph_hits = [g for g in graph_hits if g['doc_id'] in allowed]
 
             if graph_expansion_only:
@@ -289,27 +296,28 @@ class HybridSearchEngine:
 
         fused = self.reciprocal_rank_fusion(channels)[:top_k]
 
-        documents = self._fetch_documents(
-            [(r['doc_id'], r['collection']) for r in fused])
+        documents = self._fetch_documents([r['doc_id'] for r in fused])
 
         enriched = []
         for result in fused:
             doc = documents.get(result['doc_id'])
             if doc is None:
                 continue
+            if not result['type']:
+                result['type'] = doc.get('type', '')
             result['document'] = doc
-            result['title'] = document_title(doc, result['collection'])
-            result['url'] = document_url(doc, result['collection'])
+            result['title'] = document_title(doc, result['type'])
+            result['url'] = document_url(doc, result['type'])
             enriched.append(result)
 
         return enriched
 
     def format_result(self, result: Dict) -> str:
         doc = result.get('document', {})
-        collection = result.get('collection', '')
+        doc_type = result.get('type', '')
 
         lines = [
-            f"Collection: {collection.upper()}",
+            f"Type:       {doc_type.upper()}",
             f"RRF Score:  {result.get('rrf_score', 0):.5f}",
             f"Title:      {result.get('title', 'N/A')}",
         ]
@@ -322,10 +330,10 @@ class HybridSearchEngine:
         if result.get('shared_entities'):
             lines.append("Via graph:  " + ", ".join(result['shared_entities'][:5]))
 
-        if collection == 'startups':
+        if doc_type == 'startup':
             lines.append(f"Location:   {doc.get('location', 'N/A')}")
             lines.append(f"Funding:    {doc.get('funding', 'N/A')}")
-        elif collection == 'github_repos':
+        elif doc_type == 'repo':
             lines.append(f"Stars:      {doc.get('stars', 'N/A')}")
 
         description = str(doc.get('description', ''))[:140]
@@ -346,9 +354,9 @@ if __name__ == "__main__":
     demos = [
         {'query': 'AI music generation startup', 'top_k': 3},
         {'query': 'open source framework for building LLM agents',
-         'collection': 'github_repos', 'top_k': 3},
+         'doc_type': 'repo', 'top_k': 3},
         {'query': 'startups that raised a Series A',
-         'collection': 'startups', 'top_k': 3},
+         'doc_type': 'startup', 'top_k': 3},
     ]
 
     for i, demo in enumerate(demos, 1):

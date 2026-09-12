@@ -1,534 +1,194 @@
-"""Import Data from MongoDB to Neo4j (ETL Script)"""
+"""
+MongoDB -> Neo4j.
+
+    python scripts/import_to_neo4j.py            # merge into whatever is there
+    python scripts/import_to_neo4j.py --fresh    # clear the graph first
+    python scripts/import_to_neo4j.py --yes      # never prompt (for schedulers)
+
+One node per document, labelled by its type (see src/corpus/types.py),
+carrying `doc_id` so graph-expansion retrieval can span every label with
+one pattern. One Entity node per canonical entity, and a MENTIONS edge per
+(document, entity) pair with the mention count. MERGE throughout, so
+re-running updates rather than duplicates.
+"""
 
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.database.mongo_client import MongoDBClient
-from src.database.neo4j_client import Neo4jClient
+import argparse
 import logging
 from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
+from src.corpus.types import COLLECTION, DOC_TYPES, TYPE_NAMES
+from src.database.mongo_client import MongoDBClient
+from src.database.neo4j_client import Neo4jClient
+
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# Batch size for processing (how many nodes to create at once)
-BATCH_SIZE = 100
-
-
-def import_entities(mongo, neo4j):
-    """Import Entity nodes from MongoDB canonical_entities collection"""
-
-    print("\n" + "=" * 70)
-    print("IMPORTING ENTITIES")
-    print("=" * 70)
-
-    # EXTRACT: Read from MongoDB
-    print("\n[1] Reading entities from MongoDB...")
-    entities = list(mongo.db.canonical_entities.find())
-    print(f"Found {len(entities)} entities")
-
-    if len(entities) == 0:
-        print("WARNING No entities found. Run scripts/extract_entities.py first!")
-        return 0
-
-    # TRANSFORM: Convert MongoDB docs to Neo4j format
-    print("\n[2] Transforming data for Neo4j...")
-    entity_batch = []
-
-    for entity in entities:
-        # Convert MongoDB document to dictionary for Neo4j
-        entity_data = {
-            'entity_text': entity['entity_text'],
-            'entity_type': entity['entity_type'],
-            'mention_count': entity['mention_count']
-        }
-        entity_batch.append(entity_data)
-
-    # LOAD: Insert into Neo4j using batch processing
-    print(f"\n[3] Creating {len(entity_batch)} Entity nodes in Neo4j...")
-
-    # Cypher query - MERGE ensures uniqueness using constraint we created
-    query = """
-    UNWIND $batch AS entity
-    MERGE (e:Entity {
-        entity_text: entity.entity_text,
-        entity_type: entity.entity_type
-    })
-    SET e.mention_count = entity.mention_count
-    """
-
-    neo4j.run_write_query(query, {'batch': entity_batch})
-
-    logger.info(f"Created {len(entity_batch)} Entity nodes")
-    return len(entity_batch)
-
-
-def import_startups(mongo, neo4j):
-    """Import Startup nodes from MongoDB startups collection"""
-
-    print("\n" + "=" * 70)
-    print("IMPORTING STARTUPS")
-    print("=" * 70)
-
-    # EXTRACT: Read from MongoDB
-    print("\n[1] Reading startups from MongoDB...")
-    startups = list(mongo.db.startups.find())
-    print(f"Found {len(startups)} startups")
-
-    if len(startups) == 0:
-        print("WARNING No startups found!")
-        return 0
-
-    # TRANSFORM: Convert to Neo4j format
-    print("\n[2] Transforming startup data...")
-    startup_batch = []
-
-    for startup in startups:
-        # Convert MongoDB _id to string (Neo4j can't handle ObjectId)
-        startup_data = {
-            'startup_id': str(startup['_id']),
-            'name': startup.get('name', ''),
-            'description': startup.get('description', ''),
-            'location': startup.get('location', ''),
-            'funding_amount': startup.get('funding_amount', ''),
-            'founded_date': startup.get('founded_date', ''),
-            'website': startup.get('website', ''),
-            'source': startup.get('source', '')
-        }
-
-        # Add any other fields that exist in your startup documents
-        # This preserves all data from MongoDB
-        for key, value in startup.items():
-            if key not in startup_data and key != '_id' and key != 'entities':
-                # Skip _id (already converted) and entities (handled separately)
-                startup_data[key] = value
-
-        startup_batch.append(startup_data)
-
-    # LOAD: Insert into Neo4j
-    print(f"\n[3] Creating {len(startup_batch)} Startup nodes in Neo4j...")
-
-    query = """
-    UNWIND $batch AS startup
-    MERGE (s:Startup {startup_id: startup.startup_id})
-    SET s.doc_id = startup.startup_id,
-        s.name = startup.name,
-        s.description = startup.description,
-        s.location = startup.location,
-        s.funding_amount = startup.funding_amount,
-        s.founded_date = startup.founded_date,
-        s.website = startup.website,
-        s.source = startup.source
-    """
-
-    neo4j.run_write_query(query, {'batch': startup_batch})
-
-    logger.info(f"Created {len(startup_batch)} Startup nodes")
-    return len(startup_batch)
-
-
-def import_articles(mongo, neo4j):
-    """Import Article nodes from MongoDB articles collection"""
-
-    print("\n" + "=" * 70)
-    print("IMPORTING ARTICLES")
-    print("=" * 70)
-
-    # EXTRACT
-    print("\n[1] Reading articles from MongoDB...")
-    articles = list(mongo.db.articles.find())
-    print(f"Found {len(articles)} articles")
-
-    if len(articles) == 0:
-        print("WARNING No articles found!")
-        return 0
-
-    # TRANSFORM
-    print("\n[2] Transforming article data...")
-    article_batch = []
-
-    for article in articles:
-        article_data = {
-            'article_id': str(article['_id']),
-            'title': article.get('title', ''),
-            'description': article.get('description', ''),
-            'url': article.get('url', ''),
-            'published_date': article.get('published_date', ''),
-            'source': article.get('source', '')
-        }
-
-        # Add any other fields
-        for key, value in article.items():
-            if key not in article_data and key != '_id' and key != 'entities':
-                article_data[key] = value
-
-        article_batch.append(article_data)
-
-    # LOAD
-    print(f"\n[3] Creating {len(article_batch)} Article nodes in Neo4j...")
-
-    query = """
-    UNWIND $batch AS article
-    MERGE (a:Article {article_id: article.article_id})
-    SET a.doc_id = article.article_id,
-        a.title = article.title,
-        a.description = article.description,
-        a.url = article.url,
-        a.published_date = article.published_date,
-        a.source = article.source
-    """
-
-    neo4j.run_write_query(query, {'batch': article_batch})
-
-    logger.info(f"Created {len(article_batch)} Article nodes")
-    return len(article_batch)
-
-
-def import_github_repos(mongo, neo4j):
-    """Import GitHubRepo nodes from MongoDB github_repos collection"""
-
-    print("\n" + "=" * 70)
-    print("IMPORTING GITHUB REPOS")
-    print("=" * 70)
-
-    # EXTRACT
-    print("\n[1] Reading repos from MongoDB...")
-    repos = list(mongo.db.github_repos.find())
-    print(f"Found {len(repos)} repos")
-
-    if len(repos) == 0:
-        print("WARNING No repos found!")
-        return 0
-
-    # TRANSFORM
-    print("\n[2] Transforming repo data...")
-    repo_batch = []
-
-    for repo in repos:
-        repo_data = {
-            'repo_id': str(repo['_id']),
-            'full_name': repo.get('full_name', ''),
-            'description': repo.get('description', ''),
-            'stars': repo.get('stars', 0),
-            'forks': repo.get('forks', 0),
-            'language': repo.get('language', ''),
-            'url': repo.get('url', ''),
-            'topics': str(repo.get('topics', []))  # Convert list to string
-        }
-
-        # Add any other fields
-        for key, value in repo.items():
-            if key not in repo_data and key != '_id' and key != 'entities':
-                # Convert lists/dicts to strings for Neo4j
-                if isinstance(value, (list, dict)):
-                    repo_data[key] = str(value)
-                else:
-                    repo_data[key] = value
-
-        repo_batch.append(repo_data)
-
-    # LOAD
-    print(f"\n[3] Creating {len(repo_batch)} GitHubRepo nodes in Neo4j...")
-
-    query = """
-    UNWIND $batch AS repo
-    MERGE (r:GitHubRepo {repo_id: repo.repo_id})
-    SET r.doc_id = repo.repo_id,
-        r.full_name = repo.full_name,
-        r.description = repo.description,
-        r.stars = repo.stars,
-        r.forks = repo.forks,
-        r.language = repo.language,
-        r.url = repo.url,
-        r.topics = repo.topics
-    """
-
-    neo4j.run_write_query(query, {'batch': repo_batch})
-
-    logger.info(f"Created {len(repo_batch)} GitHubRepo nodes")
-    return len(repo_batch)
-
-
-def create_mention_relationships(mongo, neo4j):
-    """Create MENTIONS relationships with mention counts and importance scores"""
-
-    print("\n" + "=" * 70)
-    print("CREATING MENTION RELATIONSHIPS (WITH COUNTS)")
-    print("=" * 70)
-
-    total_relationships = 0
-
-    # Process Startups
-    print("\n[1] Creating Startup -> Entity relationships...")
-    startups = list(mongo.db.startups.find({'entities': {'$exists': True}}))
-
-    relationship_batch = []
-    for startup in startups:
-        startup_id = str(startup['_id'])
-        entities = startup.get('entities', [])
-
-        for entity in entities:
-            # Get count from entity extractor (new format)
-            count = entity.get('count', 1)
-            
-            # Calculate importance (entities mentioned more = more important)
-            # Scale: 1 mention = 0.1, 5+ mentions = 1.0
-            importance = min(count * 0.2, 1.0)
-            
-            relationship_batch.append({
-                'doc_id': startup_id,
-                'entity_text': entity.get('entity_text') or entity.get('text'),  # Support old & new format
-                'entity_type': entity.get('entity_type') or entity.get('label'),
-                'count': count,
-                'importance': importance
-            })
-
-    if relationship_batch:
-        query = """
-        UNWIND $batch AS rel
-        MATCH (s:Startup {startup_id: rel.doc_id})
-        MATCH (e:Entity {entity_text: rel.entity_text, entity_type: rel.entity_type})
-        MERGE (s)-[m:MENTIONS]->(e)
-        SET m.count = rel.count,
-            m.importance = rel.importance,
-            m.created_at = datetime()
-        """
-        neo4j.run_write_query(query, {'batch': relationship_batch})
-        total_mentions = sum(r['count'] for r in relationship_batch)
-        print(f"  Created {len(relationship_batch)} relationships ({total_mentions} total mentions)")
-        total_relationships += len(relationship_batch)
-
-    # Process Articles
-    print("\n[2] Creating Article -> Entity relationships...")
-    articles = list(mongo.db.articles.find({'entities': {'$exists': True}}))
-
-    relationship_batch = []
-    for article in articles:
-        article_id = str(article['_id'])
-        entities = article.get('entities', [])
-
-        for entity in entities:
-            count = entity.get('count', 1)
-            importance = min(count * 0.2, 1.0)
-            
-            relationship_batch.append({
-                'doc_id': article_id,
-                'entity_text': entity.get('entity_text') or entity.get('text'),
-                'entity_type': entity.get('entity_type') or entity.get('label'),
-                'count': count,
-                'importance': importance
-            })
-
-    if relationship_batch:
-        query = """
-        UNWIND $batch AS rel
-        MATCH (a:Article {article_id: rel.doc_id})
-        MATCH (e:Entity {entity_text: rel.entity_text, entity_type: rel.entity_type})
-        MERGE (a)-[m:MENTIONS]->(e)
-        SET m.count = rel.count,
-            m.importance = rel.importance,
-            m.created_at = datetime()
-        """
-        neo4j.run_write_query(query, {'batch': relationship_batch})
-        total_mentions = sum(r['count'] for r in relationship_batch)
-        print(f"  Created {len(relationship_batch)} relationships ({total_mentions} total mentions)")
-        total_relationships += len(relationship_batch)
-
-    # Process GitHub Repos
-    print("\n[3] Creating GitHubRepo -> Entity relationships...")
-    repos = list(mongo.db.github_repos.find({'entities': {'$exists': True}}))
-
-    relationship_batch = []
-    for repo in repos:
-        repo_id = str(repo['_id'])
-        entities = repo.get('entities', [])
-
-        for entity in entities:
-            count = entity.get('count', 1)
-            importance = min(count * 0.2, 1.0)
-            
-            relationship_batch.append({
-                'doc_id': repo_id,
-                'entity_text': entity.get('entity_text') or entity.get('text'),
-                'entity_type': entity.get('entity_type') or entity.get('label'),
-                'count': count,
-                'importance': importance
-            })
-
-    if relationship_batch:
-        query = """
-        UNWIND $batch AS rel
-        MATCH (r:GitHubRepo {repo_id: rel.doc_id})
-        MATCH (e:Entity {entity_text: rel.entity_text, entity_type: rel.entity_type})
-        MERGE (r)-[m:MENTIONS]->(e)
-        SET m.count = rel.count,
-            m.importance = rel.importance,
-            m.created_at = datetime()
-        """
-        neo4j.run_write_query(query, {'batch': relationship_batch})
-        total_mentions = sum(r['count'] for r in relationship_batch)
-        print(f"  Created {len(relationship_batch)} relationships ({total_mentions} total mentions)")
-        total_relationships += len(relationship_batch)
-
-    # Update Entity nodes with global statistics
-    print("\n[4] Updating Entity global statistics...")
-    update_entity_statistics(neo4j)
-
-    logger.info(f"Created {total_relationships} total relationships")
-    return total_relationships
-
-
-def update_entity_statistics(neo4j):
-    """Update Entity nodes with global mention statistics"""
-    query = """
-    MATCH (e:Entity)
-    OPTIONAL MATCH ()-[m:MENTIONS]->(e)
-    WITH e, 
-         sum(m.count) as total_mentions,
-         count(DISTINCT m) as document_count,
-         avg(m.importance) as avg_importance
-    SET e.total_mentions = coalesce(total_mentions, 0),
-        e.document_count = coalesce(document_count, 0),
-        e.avg_importance = coalesce(avg_importance, 0.0),
-        e.last_updated = datetime()
-    RETURN count(e) as updated_entities
-    """
-    
-    result = neo4j.run_query(query)
-    count = result[0]['updated_entities'] if result else 0
-    print(f"  Updated statistics for {count} entities")
-
-
-def print_graph_statistics(neo4j):
-    """Print statistics about the graph we just created"""
-
-    print("\n" + "=" * 70)
-    print("GRAPH STATISTICS")
-    print("=" * 70)
-
-    # Count nodes by type
-    print("\nNodes by type:")
-
-    result = neo4j.run_query("MATCH (s:Startup) RETURN count(s) as count")
-    print(f"  Startups: {result[0]['count']}")
-
-    result = neo4j.run_query("MATCH (a:Article) RETURN count(a) as count")
-    print(f"  Articles: {result[0]['count']}")
-
-    result = neo4j.run_query("MATCH (r:GitHubRepo) RETURN count(r) as count")
-    print(f"  GitHubRepos: {result[0]['count']}")
-
-    result = neo4j.run_query("MATCH (e:Entity) RETURN count(e) as count")
-    print(f"  Entities: {result[0]['count']}")
-
-    # Count relationships
-    print("\nRelationships:")
-    result = neo4j.run_query("MATCH ()-[r:MENTIONS]->() RETURN count(r) as count")
-    print(f"  MENTIONS: {result[0]['count']}")
-
-    # Total
-    total_nodes = neo4j.get_node_count()
-    total_rels = neo4j.get_relationship_count()
-    print(f"\nTotal nodes: {total_nodes}")
-    print(f"Total relationships: {total_rels}")
-
-    # Sample queries
-    print("\n" + "=" * 70)
-    print("SAMPLE QUERIES")
-    print("=" * 70)
-
-    print("\nTop 5 most mentioned entities:")
-    result = neo4j.run_query("""
-        MATCH (e:Entity)
-        RETURN e.entity_text, e.entity_type, e.mention_count
-        ORDER BY e.mention_count DESC
-        LIMIT 5
-    """)
-    for i, record in enumerate(result, 1):
-        print(f"  {i}. {record['e.entity_text']} ({record['e.entity_type']}): {record['e.mention_count']} mentions")
-
-    print("\nSample startup with entities:")
-    result = neo4j.run_query("""
-        MATCH (s:Startup)-[:MENTIONS]->(e:Entity)
-        RETURN s.name, collect(e.entity_text)[0..5] as entities
-        LIMIT 1
-    """)
-    if result:
-        print(f"  {result[0]['s.name']} mentions: {result[0]['entities']}")
+BATCH_SIZE = 500
+
+# Fields copied onto the node, per type. Everything else stays in MongoDB.
+NODE_FIELDS = {
+    'startup': ('name', 'description', 'location', 'funding', 'source', 'link'),
+    'article': ('title', 'description', 'author', 'published_date', 'source', 'article_url'),
+    'repo': ('full_name', 'description', 'stars', 'forks', 'primary_language', 'source', 'html_url'),
+}
+
+
+def _scalar(value):
+    """Neo4j properties must be primitives or lists of primitives."""
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    if isinstance(value, dict):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
+def _batches(items, size=BATCH_SIZE):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def import_entities(mongo, neo4j) -> int:
+    entities = [{
+        'entity_text': e['entity_text'],
+        'entity_type': e['entity_type'],
+        'mention_count': e.get('mention_count', 0),
+        'document_count': e.get('document_count', 0),
+    } for e in mongo.db.canonical_entities.find()]
+
+    for batch in _batches(entities):
+        neo4j.run_write_query("""
+            UNWIND $batch AS entity
+            MERGE (e:Entity {entity_text: entity.entity_text,
+                             entity_type: entity.entity_type})
+            SET e.mention_count = entity.mention_count,
+                e.document_count = entity.document_count
+        """, {'batch': batch})
+    return len(entities)
+
+
+def import_documents(mongo, neo4j) -> dict:
+    counts = {}
+    for doc_type in TYPE_NAMES:
+        label = DOC_TYPES[doc_type].neo4j_label
+        fields = NODE_FIELDS.get(doc_type, ('name', 'title', 'description', 'source'))
+        rows = []
+        for doc in mongo.db[COLLECTION].find({'type': doc_type}):
+            props = {f: _scalar(doc.get(f)) for f in fields if doc.get(f) is not None}
+            props['doc_key'] = doc.get('doc_key')
+            props['type'] = doc_type
+            if doc.get('event_at'):
+                props['event_at'] = _scalar(doc['event_at'])
+            rows.append({'doc_id': str(doc['_id']), 'props': props})
+
+        for batch in _batches(rows):
+            neo4j.run_write_query(f"""
+                UNWIND $batch AS row
+                MERGE (d:{label} {{doc_id: row.doc_id}})
+                SET d += row.props
+            """, {'batch': batch})
+        counts[doc_type] = len(rows)
+    return counts
+
+
+def import_mentions(mongo, neo4j) -> int:
+    total = 0
+    for doc_type in TYPE_NAMES:
+        label = DOC_TYPES[doc_type].neo4j_label
+        rows = []
+        for doc in mongo.db[COLLECTION].find(
+                {'type': doc_type, 'entities': {'$exists': True}},
+                {'entities': 1}):
+            entities = doc.get('entities') or []
+            if isinstance(entities, str):
+                continue
+            for ent in entities:
+                text = ent.get('entity_text')
+                etype = ent.get('entity_type')
+                if not text or not etype:
+                    continue
+                rows.append({
+                    'doc_id': str(doc['_id']),
+                    'entity_text': text,
+                    'entity_type': etype,
+                    'count': ent.get('count', 1),
+                })
+
+        for batch in _batches(rows):
+            neo4j.run_write_query(f"""
+                UNWIND $batch AS rel
+                MATCH (d:{label} {{doc_id: rel.doc_id}})
+                MATCH (e:Entity {{entity_text: rel.entity_text,
+                                  entity_type: rel.entity_type}})
+                MERGE (d)-[m:MENTIONS]->(e)
+                SET m.count = rel.count
+            """, {'batch': batch})
+        total += len(rows)
+    return total
+
+
+def graph_summary(neo4j) -> dict:
+    summary = {}
+    for doc_type in TYPE_NAMES:
+        label = DOC_TYPES[doc_type].neo4j_label
+        summary[label] = neo4j.run_query(
+            f"MATCH (n:{label}) RETURN count(n) AS n")[0]['n']
+    summary['Entity'] = neo4j.run_query("MATCH (e:Entity) RETURN count(e) AS n")[0]['n']
+    summary['MENTIONS'] = neo4j.run_query(
+        "MATCH ()-[r:MENTIONS]->() RETURN count(r) AS n")[0]['n']
+    summary['nodes'] = neo4j.get_node_count()
+    summary['relationships'] = neo4j.get_relationship_count()
+    return summary
 
 
 def main():
-    """Main ETL function"""
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--fresh', action='store_true', help='clear the graph first')
+    parser.add_argument('--yes', action='store_true', help='do not prompt')
+    args = parser.parse_args()
 
-    print("=" * 70)
-    print("MONGODB → NEO4J ETL")
-    print("=" * 70)
+    print("=" * 72)
+    print("MONGODB -> NEO4J")
+    print("=" * 72)
 
-    start_time = datetime.now()
-
-    # Connect to databases
-    print("\n[1] Connecting to databases...")
     mongo = MongoDBClient()
     neo4j = Neo4jClient()
-    print("SUCCESS Connected to both databases\n")
+    if not neo4j.available:
+        raise SystemExit("Neo4j is not reachable; nothing imported.")
 
-    # Check current state
-    print("[2] Checking current state...")
-    node_count = neo4j.get_node_count()
-    print(f"Neo4j currently has {node_count} nodes")
+    existing = neo4j.get_node_count()
+    print(f"  database: {mongo.db_name}    Neo4j nodes now: {existing}")
 
-    if node_count > 0:
-        print("\nWARNING: Neo4j already has data!")
-        print("Options:")
-        print("  1. Continue and merge with existing data (safe)")
-        print("  2. Clear database and start fresh")
-        response = input("\nContinue with merge? (y/n): ")
+    if args.fresh and existing:
+        if not args.yes:
+            answer = input(f"  Delete all {existing} nodes and re-import? (y/n): ")
+            if answer.strip().lower() != 'y':
+                raise SystemExit("  Aborted.")
+        neo4j.clear_database()
+        print("  Cleared.")
 
-        if response.lower() != 'y':
-            print("Aborted. Run neo4j.clear_database() if you want a fresh start.")
-            mongo.close()
-            neo4j.close()
-            return
+    started = datetime.now()
+    n_entities = import_entities(mongo, neo4j)
+    print(f"  Entity nodes:      {n_entities}")
+    doc_counts = import_documents(mongo, neo4j)
+    for doc_type, n in doc_counts.items():
+        print(f"  {DOC_TYPES[doc_type].neo4j_label + ' nodes:':<19}{n}")
+    n_mentions = import_mentions(mongo, neo4j)
+    print(f"  MENTIONS edges:    {n_mentions}")
 
-    # Import data
-    print("\n" + "=" * 70)
-    print("STARTING IMPORT")
-    print("=" * 70)
+    summary = graph_summary(neo4j)
+    print(f"\n  Graph: {summary['nodes']} nodes, {summary['relationships']} relationships "
+          f"({(datetime.now() - started).total_seconds():.1f}s)")
 
-    entity_count = import_entities(mongo, neo4j)
-    startup_count = import_startups(mongo, neo4j)
-    article_count = import_articles(mongo, neo4j)
-    repo_count = import_github_repos(mongo, neo4j)
-    relationship_count = create_mention_relationships(mongo, neo4j)
-
-    # Print statistics
-    print_graph_statistics(neo4j)
-
-    # Summary
-    end_time = datetime.now()
-    duration = (end_time - start_time).total_seconds()
-
-    print("\n" + "=" * 70)
-    print("SUCCESS ETL COMPLETE")
-    print("=" * 70)
-    print(f"\nImported in {duration:.2f} seconds:")
-    print(f"{entity_count} entities")
-    print(f"{startup_count} startups")
-    print(f"{article_count} articles")
-    print(f"{repo_count} GitHub repos")
-    print(f"{relationship_count} MENTIONS relationships")
-
-    print("\nNext steps:")
-    print("  1. Open Neo4j Browser: http://localhost:7474")
-    print("  2. Try this query: MATCH (s:Startup)-[:MENTIONS]->(e:Entity) RETURN s, e LIMIT 25")
-    print("  3. Explore the graph visually!")
-    print("  4. Ready for Sub-Phase 2.5 (Vector Embeddings)")
-
-    # Cleanup
     mongo.close()
     neo4j.close()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

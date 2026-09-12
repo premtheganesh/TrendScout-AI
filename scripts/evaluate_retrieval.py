@@ -21,6 +21,7 @@ import logging
 import argparse
 from typing import Dict, List, Set
 
+from src.corpus.types import COLLECTION
 from src.database.mongo_client import MongoDBClient
 from src.search.hybrid_search import HybridSearchEngine
 from src.search.document_text import document_title
@@ -80,9 +81,8 @@ def ndcg_at_k(retrieved: List[str], gains: Dict[str, int], k: int) -> float:
 def build_name_index(mongo) -> Dict[str, str]:
     """Map every document title to its _id."""
     index = {}
-    for collection in ('startups', 'articles', 'github_repos'):
-        for doc in mongo.db[collection].find():
-            index[document_title(doc, collection)] = str(doc['_id'])
+    for doc in mongo.db[COLLECTION].find():
+        index[document_title(doc, doc.get('type'))] = str(doc['_id'])
     return index
 
 
