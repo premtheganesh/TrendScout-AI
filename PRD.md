@@ -213,7 +213,7 @@ Planned:
 - [x] `PRD.md` committed at repo root
 - [x] Tests still pass (136 passed)
 - [x] Push
-- [ ] Rename folder to `TrendScout - AI Conversational Agent` (last, restarts the session)
+- [x] Rename folder to `TrendScout - AI Conversational Agent` (venv script paths patched, 133 files)
 
 Deferred deletions (each in the phase that proves nothing imports it):
 `src/schemas/*`, `src/llm/normalizer.py` (Phase 2); `src/scrapers/startup_scraper.py`,
