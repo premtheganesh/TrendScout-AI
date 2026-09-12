@@ -62,3 +62,6 @@ notes/
 
 # Local database dumps
 backups/
+
+# Indexes built for the frozen evaluation corpus
+data/eval_index/

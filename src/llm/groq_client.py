@@ -1,11 +1,11 @@
 """Groq API wrapper."""
 
-import os
 from groq import Groq
-from dotenv import load_dotenv
 import logging
 import json
 from typing import Dict, Any, Optional
+
+from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +26,8 @@ class GroqClient:
 
     def __init__(self, model: str = None, verify: bool = True):
         """Initialize Groq client."""
-        load_dotenv()
-
-        api_key = os.getenv('GROQ_API_KEY')
+        settings = get_settings()
+        api_key = settings.groq_api_key
         if not api_key:
             raise ValueError(
                 "GROQ_API_KEY not found. Copy .env.example to .env and add "
@@ -36,7 +35,7 @@ class GroqClient:
             )
 
         self.client = Groq(api_key=api_key)
-        requested = model or os.getenv('GROQ_MODEL') or self.DEFAULT_MODEL
+        requested = model or settings.groq_model or self.DEFAULT_MODEL
         self.model = self._resolve_model(requested) if verify else requested
 
         logger.info(f"Groq client initialized with model: {self.model}")

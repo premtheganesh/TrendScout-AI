@@ -1,14 +1,10 @@
 """GitHub Repository Scraper Scrapes trending AI repositories from GitHub API"""
 import requests
-import os
-from dotenv import load_dotenv
+from src.config import get_settings
 from src.database.mongo_client import MongoDBClient
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime
-
-# Load environment variables
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +16,7 @@ class GitHubScraper:
         """Initialize GitHub scraper"""
         self.mongo = MongoDBClient()
         self.api_url = "https://api.github.com/search/repositories"
-        self.token = os.getenv('GITHUB_TOKEN')
+        self.token = get_settings().github_token
 
         if not self.token or self.token == 'your_github_token_here':
             logger.warning("GitHub token not set. API rate limits will be lower.")

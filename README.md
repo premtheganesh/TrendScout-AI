@@ -124,7 +124,7 @@ cp .env.example .env        # then fill in GROQ_API_KEY and MongoDB/Neo4j
 python scripts/extract_entities.py     # NER + canonical entity index
 python scripts/build_indexes.py        # E5 embeddings -> FAISS, and BM25
 python scripts/setup_neo4j_schema.py   # optional
-python scripts/import_to_neo4j.py --fresh
+python scripts/import_to_neo4j.py
 
 python src/api/main.py                 # API -> localhost:8000/docs
 streamlit run src/ui/app.py            # UI  -> localhost:8501
@@ -134,6 +134,25 @@ MongoDB must be running (`brew services start mongodb-community`). Neo4j is
 optional: if it is unreachable the graph endpoints return 503 and everything
 else works, because graph-expansion retrieval reads the same entity links
 from MongoDB.
+
+All configuration is read from `.env` through `src/config.py`; any value can
+be overridden per process (`MONGODB_DB=... INDEX_DIR=... python ...`).
+
+### Reproducing the evaluation
+
+The corpus the numbers above were measured on is committed as
+`data/eval/corpus_v1.jsonl` (857 records, no embeddings). Load it into its
+own database and index directory, then evaluate:
+
+```bash
+MONGODB_DB=trendscout_eval INDEX_DIR=data/eval_index \
+    python scripts/load_eval_corpus.py --build-indexes
+MONGODB_DB=trendscout_eval INDEX_DIR=data/eval_index \
+    python scripts/evaluate_retrieval.py
+```
+
+This reproduces the table exactly, and keeps working as the live corpus
+grows, because the evaluation never reads the live database.
 
 ## API
 
@@ -171,12 +190,16 @@ src/
   llm/groq_client.py      Groq wrapper with model resolution
   api/main.py             FastAPI
   ui/app.py               Streamlit
+  config.py               all settings, from .env / environment
 scripts/
-  build_indexes.py        rebuild FAISS + BM25
+  build_indexes.py        rebuild FAISS + BM25 into INDEX_DIR
   extract_entities.py     NER + canonical entity index
   evaluate_retrieval.py   metrics, ablations, weight sweep
+  export_eval_corpus.py   freeze the corpus as a snapshot
+  load_eval_corpus.py     load a snapshot into a separate database
   import_to_neo4j.py      push the graph to Neo4j
 data/eval/queries.json    labelled evaluation set
+data/eval/corpus_v1.jsonl frozen corpus the numbers were measured on
 tests/
 ```
 
@@ -187,8 +210,10 @@ pytest tests/ -q
 ```
 
 Unit tests (tokenisation, fusion arithmetic, document rendering, RAG
-plumbing) run with no database and no network. Integration tests skip
-rather than fail when MongoDB or the indexes are missing.
+plumbing, configuration, the evaluation snapshot) run with no database and
+no network. Tests marked `needs_mongo` / `needs_indexes` skip rather than
+fail when MongoDB or the indexes are missing; `pytest -m "not needs_mongo"`
+runs only the offline ones.
 
 ## Corpus
 

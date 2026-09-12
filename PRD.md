@@ -3,7 +3,7 @@
 Living document. Updated at the end of every phase with what was built,
 what changed from the plan, and the measured numbers.
 
-Last updated: 2026-09-12 (Phase 0)
+Last updated: 2026-09-12 (Phase 1)
 
 ---
 
@@ -68,8 +68,7 @@ Known problems this project fixes:
 - `/graph/query` runs arbitrary Cypher unauthenticated; `/search` forwards a
   raw MongoDB filter from the client; CORS is `*`; endpoints are `async def`
   around blocking calls.
-- Evaluation numbers are not reproducible from a fresh clone (corpus lives
-  only in local MongoDB).
+- ~~Evaluation numbers are not reproducible from a fresh clone~~ — fixed in Phase 1.
 
 ## 6. Sources
 
@@ -174,7 +173,7 @@ this file.
 | # | Phase | Status |
 |---|---|---|
 | 0 | PRD, backup, cleanup, rename | ✅ done 2026-09-12 |
-| 1 | Config + frozen evaluation corpus | ⬜ |
+| 1 | Config + frozen evaluation corpus | ✅ done 2026-09-12 |
 | 2 | Unified `documents` collection | ⬜ |
 | 3 | Ingestion framework + first 3 sources | ⬜ |
 | 4 | Incremental processing + scheduling | ⬜ |
@@ -221,3 +220,23 @@ Deferred deletions (each in the phase that proves nothing imports it):
 `scripts/check_collections.py`, unused `mongo_client.py` methods (Phase 4).
 
 Deviations from plan: none.
+
+### Phase 1 — Config + frozen evaluation corpus (2026-09-12)
+
+Planned:
+- [x] `src/config.py` (pydantic-settings): Mongo URI/db, `INDEX_DIR`, Neo4j, Groq, GitHub token, CORS origins, admin token; environment overrides `.env`
+- [x] Threaded through `MongoDBClient` (now honours `MONGODB_DB`), `BM25Index` (path resolved at call time), `HybridSearchEngine` (`index_dir` arg), `build_indexes.py`, `GroqClient`, `Neo4jClient`, `GitHubScraper` — no `os.getenv` left for these keys
+- [x] `data/eval/corpus_v1.jsonl` — 857 records (140 startups, 20 articles, 50 repos, 647 canonical entities), 469 KB, `_id`s preserved, embeddings excluded
+- [x] `scripts/export_eval_corpus.py`, `scripts/load_eval_corpus.py --build-indexes` (refuses to overwrite the live DB without `--force`)
+- [x] pytest markers `needs_mongo` / `needs_indexes` / `eval_corpus` registered; skipping moved to a collection hook so `-m "not needs_mongo"` works
+- [x] `feedparser` installed; `pydantic-settings`, `pytest-socket`, `pytest-recording` pinned
+- [x] Tests: 147 passed (136 → +7 config, +4 snapshot integrity)
+
+Acceptance:
+- `MONGODB_DB=trendscout_eval INDEX_DIR=data/eval_index python scripts/evaluate_retrieval.py` after a fresh load reproduces the README table **exactly** (BM25 0.743 · Dense 0.882 · Hybrid 0.881 · +Graph naive 0.794 · +Graph recall 0.881 nDCG@10) — target was ±0.005
+- Live `data/` indexes untouched by the eval build (separate `INDEX_DIR`)
+- `INDEX_DIR=/nonexistent pytest tests/test_integration.py` → 14 skipped with a clear reason, 6 passed
+
+Deviations from plan: none. Extra: `tests/test_eval_corpus.py` checks the
+snapshot's counts, that no embeddings leaked in, that every entity link
+resolves, and that every label in `queries.json` still matches a title.

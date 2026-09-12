@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 import faiss
 import numpy as np
 
+from src.config import get_settings
 from src.database.mongo_client import MongoDBClient
 from src.embeddings.embedding_generator import EmbeddingGenerator
 from src.search.bm25_index import BM25Index
@@ -25,7 +26,6 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s  %(message)s')
 logger = logging.getLogger(__name__)
 
 COLLECTIONS = ('startups', 'articles', 'github_repos')
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 
 
 def build_dense_index(mongo, generator):
@@ -73,8 +73,10 @@ def build_dense_index(mongo, generator):
     index = faiss.IndexFlatIP(embeddings.shape[1])
     index.add(embeddings)
 
-    index_path = os.path.join(DATA_DIR, 'faiss_index.bin')
-    metadata_path = os.path.join(DATA_DIR, 'faiss_metadata.pkl')
+    settings = get_settings()
+    os.makedirs(settings.index_dir, exist_ok=True)
+    index_path = settings.faiss_index_path
+    metadata_path = settings.faiss_metadata_path
 
     faiss.write_index(index, index_path)
     with open(metadata_path, 'wb') as f:
@@ -96,7 +98,7 @@ def build_lexical_index(mongo):
     print("=" * 72)
 
     bm25 = BM25Index().build(mongo)
-    path = bm25.save()
+    path = bm25.save(get_settings().bm25_index_path)
     print(f"  Indexed {len(bm25)} documents -> {path}")
     return len(bm25)
 
@@ -107,6 +109,7 @@ def main():
     print("=" * 72)
 
     mongo = MongoDBClient()
+    print(f"  database: {mongo.db_name}\n  index dir: {get_settings().index_dir}")
     generator = EmbeddingGenerator()
 
     dense_count = build_dense_index(mongo, generator)

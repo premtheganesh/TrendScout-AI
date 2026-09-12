@@ -1,9 +1,9 @@
 """Neo4j Database Client"""
 
-import os
 from neo4j import GraphDatabase
-from dotenv import load_dotenv
 import logging
+
+from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +13,10 @@ class Neo4jClient:
 
     def __init__(self):
         """Initialize Neo4j connection using .env credentials"""
-        load_dotenv(override=True)
-
-        self.uri = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
-        self.user = os.getenv('NEO4J_USER', 'neo4j')
-        self.password = os.getenv('NEO4J_PASSWORD')
+        settings = get_settings()
+        self.uri = settings.neo4j_uri
+        self.user = settings.neo4j_user
+        self.password = settings.neo4j_password
 
         if not self.password:
             raise ValueError("NEO4J_PASSWORD not found in .env file")

@@ -1,8 +1,9 @@
 """
-Shared fixtures.
+Shared fixtures and skip logic.
 
-Unit tests run anywhere. Integration tests skip, rather than fail, when
-MongoDB or the indexes are missing.
+Unit tests run anywhere. Tests marked `needs_mongo` / `needs_indexes` skip,
+rather than fail, when MongoDB or the built indexes are missing. Markers
+are registered in pytest.ini, so `pytest -m "not needs_mongo"` works.
 """
 
 import os
@@ -12,15 +13,16 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
+from src.config import get_settings  # noqa: E402
+
+needs_mongo = pytest.mark.needs_mongo
+needs_indexes = pytest.mark.needs_indexes
 
 
 def _mongo_available() -> bool:
     try:
         from pymongo import MongoClient
-        from dotenv import load_dotenv
-        load_dotenv()
-        client = MongoClient(os.getenv('MONGODB_URI'), serverSelectionTimeoutMS=1500)
+        client = MongoClient(get_settings().mongodb_uri, serverSelectionTimeoutMS=1500)
         client.admin.command('ping')
         return True
     except Exception:
@@ -28,19 +30,30 @@ def _mongo_available() -> bool:
 
 
 def _indexes_available() -> bool:
-    return (os.path.exists(os.path.join(DATA_DIR, 'faiss_index.bin'))
-            and os.path.exists(os.path.join(DATA_DIR, 'bm25_index.pkl')))
+    s = get_settings()
+    return os.path.exists(s.faiss_index_path) and os.path.exists(s.bm25_index_path)
 
 
-needs_mongo = pytest.mark.skipif(
-    not _mongo_available(),
-    reason="MongoDB is not reachable — start it with `brew services start mongodb-community`"
-)
+def pytest_collection_modifyitems(config, items):
+    wanted = {m for item in items for m in ('needs_mongo', 'needs_indexes')
+              if m in item.keywords}
+    if not wanted:
+        return
 
-needs_indexes = pytest.mark.skipif(
-    not _indexes_available(),
-    reason="Indexes not built — run `python scripts/build_indexes.py`"
-)
+    skips = {}
+    if 'needs_mongo' in wanted and not _mongo_available():
+        skips['needs_mongo'] = pytest.mark.skip(
+            reason="MongoDB is not reachable — start it with "
+                   "`brew services start mongodb-community`")
+    if 'needs_indexes' in wanted and not _indexes_available():
+        skips['needs_indexes'] = pytest.mark.skip(
+            reason=f"Indexes not built in {get_settings().index_dir} — run "
+                   "`python scripts/build_indexes.py`")
+
+    for item in items:
+        for marker, skip in skips.items():
+            if marker in item.keywords:
+                item.add_marker(skip)
 
 
 @pytest.fixture(scope="session")

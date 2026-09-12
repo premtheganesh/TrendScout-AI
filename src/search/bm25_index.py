@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from rank_bm25 import BM25Okapi
 
+from src.config import get_settings
 from src.search.document_text import document_text
 
 logger = logging.getLogger(__name__)
@@ -23,9 +24,10 @@ STOPWORDS = {
 
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9\+\#\.\-]*")
 
-DEFAULT_INDEX_PATH = os.path.join(
-    os.path.dirname(__file__), '..', '..', 'data', 'bm25_index.pkl'
-)
+
+def default_index_path() -> str:
+    """Resolved at call time so INDEX_DIR can change per process."""
+    return get_settings().bm25_index_path
 
 
 def tokenize(text: str) -> List[str]:
@@ -80,7 +82,7 @@ class BM25Index:
         return self
 
     def save(self, path: str = None) -> str:
-        path = os.path.abspath(path or DEFAULT_INDEX_PATH)
+        path = os.path.abspath(path or default_index_path())
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'wb') as f:
             pickle.dump({
@@ -96,7 +98,7 @@ class BM25Index:
 
     @classmethod
     def load(cls, path: str = None) -> "BM25Index":
-        path = os.path.abspath(path or DEFAULT_INDEX_PATH)
+        path = os.path.abspath(path or default_index_path())
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"BM25 index not found at {path}. "

@@ -19,6 +19,7 @@ import faiss
 import numpy as np
 from bson import ObjectId
 
+from src.config import get_settings
 from src.database.mongo_client import MongoDBClient
 from src.embeddings.embedding_generator import EmbeddingGenerator
 from src.search.bm25_index import BM25Index
@@ -42,7 +43,12 @@ RRF_K = 60
 
 class HybridSearchEngine:
 
-    def __init__(self, neo4j_client=None, weights: Dict[str, float] = None):
+    def __init__(
+        self,
+        neo4j_client=None,
+        weights: Dict[str, float] = None,
+        index_dir: str = None,
+    ):
         logger.info("Initializing Hybrid Search Engine...")
 
         self.mongo = MongoDBClient()
@@ -51,11 +57,10 @@ class HybridSearchEngine:
         if weights:
             self.weights.update(weights)
 
-        data_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), '../../data')
-        )
-        index_path = os.path.join(data_dir, 'faiss_index.bin')
-        metadata_path = os.path.join(data_dir, 'faiss_metadata.pkl')
+        settings = get_settings()
+        self.index_dir = os.path.abspath(index_dir or settings.index_dir)
+        index_path = os.path.join(self.index_dir, 'faiss_index.bin')
+        metadata_path = os.path.join(self.index_dir, 'faiss_metadata.pkl')
 
         if not os.path.exists(index_path):
             raise FileNotFoundError(
@@ -74,7 +79,7 @@ class HybridSearchEngine:
                 f"{self.generator.dimension}-dim vectors. Rebuild the index."
             )
 
-        self.bm25 = BM25Index.load()
+        self.bm25 = BM25Index.load(os.path.join(self.index_dir, 'bm25_index.pkl'))
         self.graph = GraphExpander(self.mongo, neo4j_client=neo4j_client)
 
         logger.info(
