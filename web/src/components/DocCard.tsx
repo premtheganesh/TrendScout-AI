@@ -5,7 +5,7 @@ import TypeBadge from "./TypeBadge";
 
 export default function DocCard({ doc }: { doc: Doc }) {
   const subtitle = docSubtitle(doc);
-  const text = (doc.description as string | undefined) ?? "";
+  const text = ((doc.description ?? doc.summary ?? doc.abstract) as string | undefined) ?? "";
   return (
     <article className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex items-center gap-2 text-xs text-zinc-500">

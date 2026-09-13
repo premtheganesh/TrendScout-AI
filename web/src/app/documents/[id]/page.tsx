@@ -4,7 +4,9 @@ import type { Doc } from "@/lib/types";
 import TypeBadge from "@/components/TypeBadge";
 import { day, docSubtitle } from "@/lib/format";
 
-export const revalidate = 600;
+// Rendered per request; every apiGet() call is cached for REVALIDATE_SECONDS
+// in the data cache, which keeps serving stale data if a refresh fails.
+export const dynamic = "force-dynamic";
 
 type Entity = { entity_text: string; entity_type: string; count: number };
 

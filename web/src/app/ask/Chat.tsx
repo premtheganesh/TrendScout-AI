@@ -70,7 +70,7 @@ export default function Chat() {
         {turns.map((t, i) => (
           <div key={i} className={t.role === "user" ? "text-right" : ""}>
             <div className={`inline-block max-w-[85%] rounded-lg px-4 py-3 text-left ${t.role === "user" ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"}`}>
-              {t.role === "user" ? <p>{t.content}</p> : <Markdown text={t.content} />}
+              {t.role === "user" ? <p>{t.content}</p> : <Markdown text={t.content} anchorPrefix={`t${i}-`} />}
               {t.role === "assistant" && t.plan && planLine(t.plan) && (
                 <p className="mt-2 text-xs text-zinc-500">{planLine(t.plan)}</p>
               )}
@@ -79,7 +79,7 @@ export default function Chat() {
                   <summary className="cursor-pointer text-zinc-500">Sources ({t.sources.length})</summary>
                   <ol className="mt-2 space-y-1">
                     {t.sources.map((s) => (
-                      <li key={s.n} id={`src-${s.n}`} className="flex items-start gap-2">
+                      <li key={s.n} id={`t${i}-src-${s.n}`} className="flex items-start gap-2">
                         <span className="w-7 shrink-0 font-mono text-xs text-zinc-500">[{s.n}]</span>
                         <TypeBadge type={s.type} />
                         <span>

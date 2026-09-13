@@ -1,8 +1,9 @@
 import { apiGet } from "@/lib/api";
 import type { Trends, Velocity } from "@/lib/types";
-import Unavailable from "@/components/Unavailable";
 
-export const revalidate = 600;
+// Rendered per request; every apiGet() call is cached for REVALIDATE_SECONDS
+// in the data cache, which keeps serving stale data if a refresh fails.
+export const dynamic = "force-dynamic";
 
 export default async function TrendsPage() {
   const [trends, repos, models] = await Promise.all([
@@ -10,7 +11,7 @@ export default async function TrendsPage() {
     apiGet<Velocity>("/trends/velocity?type=repo&days=7"),
     apiGet<Velocity>("/trends/velocity?type=model&days=7"),
   ]);
-  if (!trends) return <Unavailable />;
+  if (!trends) return <p className="text-sm text-zinc-500">No trend data yet.</p>;
   return (
     <div className="space-y-10">
       <div>

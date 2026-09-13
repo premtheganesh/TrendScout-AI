@@ -1,14 +1,15 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import type { DigestSummary, Paged } from "@/lib/types";
-import Unavailable from "@/components/Unavailable";
 import { day } from "@/lib/format";
 
-export const revalidate = 600;
+// Rendered per request; every apiGet() call is cached for REVALIDATE_SECONDS
+// in the data cache, which keeps serving stale data if a refresh fails.
+export const dynamic = "force-dynamic";
 
 export default async function DigestsPage() {
   const data = await apiGet<Paged<DigestSummary>>("/digests?limit=52");
-  if (!data) return <Unavailable />;
+  if (!data) return <p className="text-sm text-zinc-500">Nothing here yet.</p>;
   return (
     <div>
       <h1 className="text-2xl font-semibold">Weekly digests</h1>

@@ -4,7 +4,7 @@
 
 import React from "react";
 
-function inline(text: string, keyPrefix: string): React.ReactNode[] {
+function inline(text: string, keyPrefix: string, anchorPrefix: string): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   const re = /(\*\*[^*]+\*\*|\[(\d+)\]|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g;
   let last = 0;
@@ -17,7 +17,7 @@ function inline(text: string, keyPrefix: string): React.ReactNode[] {
       out.push(<strong key={`${keyPrefix}-b${i++}`}>{token.slice(2, -2)}</strong>);
     } else if (m[2]) {
       out.push(
-        <a key={`${keyPrefix}-c${i++}`} href={`#src-${m[2]}`} className="ml-0.5 rounded bg-zinc-200 px-1 text-xs font-mono text-zinc-700 no-underline hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600">
+        <a key={`${keyPrefix}-c${i++}`} href={`#${anchorPrefix}src-${m[2]}`} className="ml-0.5 rounded bg-zinc-200 px-1 text-xs font-mono text-zinc-700 no-underline hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600">
           {m[2]}
         </a>,
       );
@@ -34,7 +34,7 @@ function inline(text: string, keyPrefix: string): React.ReactNode[] {
   return out;
 }
 
-export default function Markdown({ text }: { text: string }) {
+export default function Markdown({ text, anchorPrefix = "" }: { text: string; anchorPrefix?: string }) {
   const lines = text.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
   const blocks: React.ReactNode[] = [];
   let bullets: string[] = [];
@@ -43,7 +43,7 @@ export default function Markdown({ text }: { text: string }) {
       blocks.push(
         <ul key={`ul-${k}`} className="space-y-2 pl-5 list-disc marker:text-zinc-400">
           {bullets.map((b, j) => (
-            <li key={j} className="leading-relaxed">{inline(b, `${k}-${j}`)}</li>
+            <li key={j} className="leading-relaxed">{inline(b, `${k}-${j}`, anchorPrefix)}</li>
           ))}
         </ul>,
       );
@@ -56,7 +56,7 @@ export default function Markdown({ text }: { text: string }) {
       bullets.push(bullet[1]);
     } else {
       flush(k);
-      blocks.push(<p key={`p-${k}`} className="leading-relaxed">{inline(line, `p${k}`)}</p>);
+      blocks.push(<p key={`p-${k}`} className="leading-relaxed">{inline(line, `p${k}`, anchorPrefix)}</p>);
     }
   });
   flush(lines.length);

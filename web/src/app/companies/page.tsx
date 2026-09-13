@@ -1,17 +1,18 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import type { Company, Paged } from "@/lib/types";
-import Unavailable from "@/components/Unavailable";
 import { money } from "@/lib/format";
 
-export const revalidate = 600;
+// Rendered per request; every apiGet() call is cached for REVALIDATE_SECONDS
+// in the data cache, which keeps serving stale data if a refresh fails.
+export const dynamic = "force-dynamic";
 
 export default async function CompaniesPage({ searchParams }: { searchParams: Promise<{ q?: string; sort?: string }> }) {
   const { q, sort } = await searchParams;
   const order = sort === "documents" || sort === "name" ? sort : "funding";
   const query = q ? `&q=${encodeURIComponent(q.slice(0, 100))}` : "";
   const data = await apiGet<Paged<Company>>(`/companies?limit=60&sort=${order}${query}`);
-  if (!data) return <Unavailable />;
+  if (!data) return <p className="text-sm text-zinc-500">Nothing here yet.</p>;
   return (
     <div>
       <h1 className="text-2xl font-semibold">Companies</h1>

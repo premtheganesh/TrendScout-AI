@@ -190,8 +190,9 @@ backfilled.
 `web/` is a Next.js app (App Router, TypeScript, Tailwind): the week's
 digest on the home page, ask, search, funding, companies, trends, digests
 and an about page with the methodology and the evaluation table. Pages
-are server-rendered against the API with a 10-minute cache, so a sleeping
-backend still serves the last good page; chat and search go through the
+are rendered per request with every API call cached for 10 minutes in
+Next's data cache, so a sleeping backend still serves the pages people
+have seen; chat and search go through the
 site's own `/api/*` route handlers, so the browser never sees the backend
 and CORS never enters the picture. `npm run gen:api` regenerates
 `src/lib/openapi.d.ts` from the running API's `/openapi.json`.

@@ -43,13 +43,20 @@ accounts and the secrets they issue.
 ## 2. Hugging Face Space (the API)
 
 1. huggingface.co → New Space → **Docker** SDK, free CPU basic (2 vCPU, 16 GB).
-2. Add the Space as a git remote and push the repository (the `Dockerfile`
-   is at the root; `deploy/huggingface/README.md` is the Space card — copy
-   it to the Space's `README.md`):
+2. The Space reads its settings (`sdk: docker`, `app_port`) from the
+   front-matter of the `README.md` it receives, and the repository's own
+   README has none. Push a dedicated branch whose README is the Space card:
    ```bash
    git remote add space https://huggingface.co/spaces/<you>/trendscout-api
-   git push space main
+   git checkout -b space
+   cp deploy/huggingface/README.md README.md
+   git commit -am "Space card"
+   git push space space:main
+   git checkout main
    ```
+   Re-run the same four commands (checkout, cp, commit, push) after each
+   change you want deployed — or set the Space to build from GitHub in its
+   settings, which then only needs the front-matter merged into `README.md`.
 3. Settings → Variables and secrets:
 
    | Secret | Value |
@@ -65,8 +72,8 @@ accounts and the secrets they issue.
    must return `{"status":"ok","documents":…,"vectors":…}`.
 
    The free tier sleeps after 48 h without traffic; the first request
-   after that takes ~1–2 minutes (model load + index build). The daily
-   pipeline's `/admin/reload` call keeps it awake on weekdays.
+   after that takes about a minute (index build; the model is in the
+   image). The daily pipeline's `/admin/reload` call keeps it awake.
 
 ## 3. GitHub Actions (the pipeline)
 
@@ -96,9 +103,10 @@ a commit**; any push re-enables them.
    Directory: `web`** (framework is detected as Next.js).
 2. Environment variable: `API_URL = https://<you>-trendscout-api.hf.space`
    (server-side only; the browser talks to the site's own `/api/*` routes).
-3. Deploy. Pages are server-rendered with a 10-minute cache
-   (`revalidate = 600`), so a sleeping backend still serves the last
-   good page.
+3. Deploy. Pages are rendered per request and every API call is cached
+   for 10 minutes in Next's data cache, which keeps the last good data when
+   a refresh fails — so a sleeping backend still serves pages anyone has
+   seen in the last cache window.
 4. Put the Vercel URL into the Space's `CORS_ORIGINS`.
 
 ## 5. After the first deploy
@@ -121,9 +129,10 @@ Then open the site and ask "Which AI startups launched this week?".
 
 ## Costs and limits to know
 
-- Groq free tier: ~8,000 tokens/minute. The digest and funding extraction
-  back off automatically; a weekly run takes a few minutes longer than it
-  would with a paid key.
+- Groq free tier: ~8,000 tokens/minute **and 200,000 tokens/day**. The
+  digest and funding extraction back off on the per-minute limit; the daily
+  cap is why extraction is limited to 40 articles per daily run and why a
+  first full-corpus run takes more than one day.
 - Atlas M0: 512 MB, shared CPU. Fine for tens of thousands of documents.
 - Spaces free CPU: 16 GB RAM, sleeps after 48 h idle.
 - Vercel Hobby: plenty for a project site.

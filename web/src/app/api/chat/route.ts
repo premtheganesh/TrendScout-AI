@@ -3,7 +3,7 @@ import { apiPost } from "@/lib/api";
 import type { ChatResponse } from "@/lib/types";
 
 // Proxies /chat so the browser never sees the backend URL and CORS never
-// enters the picture. Only the fields the UI needs are forwarded.
+// enters the picture. The request is validated and capped here as well.
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as { question?: string; history?: unknown; top_k?: number } | null;
   if (!body || typeof body.question !== "string" || !body.question.trim()) {

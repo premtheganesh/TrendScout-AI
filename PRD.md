@@ -443,7 +443,7 @@ Acceptance:
 Planned:
 - [x] `web/`: Next.js 16 (App Router, TypeScript, Tailwind 4). Pages: `/` (digest + counts + rising), `/digests`, `/digests/[week]`, `/ask`, `/search`, `/funding`, `/companies`, `/companies/[slug]`, `/trends`, `/documents/[id]`, `/about` (methodology + evaluation table)
 - [x] Server components fetch the API with `revalidate = 600` and render an honest "unavailable" state instead of failing; chat and search go through `/api/chat` and `/api/search` route handlers, so the browser never sees the backend URL and CORS is moot
-- [x] `npm run gen:api` generates `src/lib/openapi.d.ts` from the API's `/openapi.json` (1,277 lines, 21 paths); hand-written `types.ts` for the fields the pages use
+- [x] `npm run gen:api` generates `src/lib/openapi.d.ts` from the API's `/openapi.json` (1,277 lines, 20 paths); hand-written `types.ts` for the fields the pages use
 - [x] `/graph/entities` and `/graph/startup/{name}` reimplemented over MongoDB (with the graph neighbourhood), so nothing public depends on Neo4j
 - [x] Streamlit retired to `tools/streamlit_app.py` as the internal debug view
 - [x] `npm run lint`, `npm run typecheck`, `npm run build` all clean
@@ -455,6 +455,8 @@ Acceptance:
 Deviations from plan:
 - `LayoutProps` (a type Next generates only after a build) replaced with an explicit props type so `tsc --noEmit` works from a clean checkout.
 - A small markdown renderer was written instead of adding a dependency: the digest and answers are bullets, bold and `[n]` citations, which become anchors to the numbered source.
+
+**Independent review (agent) of Phases 10–11 found and I fixed:** (1) **must-fix** — both pipeline workflows used `secrets.API_URL` inside a step `if:`, which GitHub rejects at parse time, so every scheduled run would have failed before checkout; the secret is now job `env` and the condition reads `env.API_URL`; (2) the "a sleeping backend still serves the last good page" claim was not true — `apiGet` returned `null` on failure, so a waking backend replaced cached pages with an empty state and turned real digest/company/document URLs into 404s; data pages are now rendered per request with every API fetch cached for 10 minutes in Next's data cache (which keeps stale data when a refresh fails), `apiGet` throws `ApiUnavailable` for anything but a genuine 404, and `app/error.tsx` shows the outage state. Verified: first request shows the digest; with the backend killed, `/`, `/digests/2026-W37` and `/funding` keep serving; a never-fetched company page shows the error state, not a 404; (3) `DEPLOY.md`'s Space instructions overwrote the Space card with the repo README — replaced with a dedicated `space` branch recipe; (4) paper cards showed no text (`summary` vs `description`); (5) chat citations across turns pointed at the first turn's sources — anchors are now per turn; (6) `/api/search` forwarded processing metadata — stripped; (7–9) doc nits (Groq daily cap, "weekdays", deprecated `TRANSFORMERS_CACHE`, pip cache key, `server-only` guard).
 
 ### Phase 11 — Deploy (2026-09-13) — deploy-ready, accounts pending
 

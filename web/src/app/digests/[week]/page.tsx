@@ -5,7 +5,9 @@ import Markdown from "@/components/Markdown";
 import SourceList from "@/components/SourceList";
 import { day } from "@/lib/format";
 
-export const revalidate = 600;
+// Rendered per request; every apiGet() call is cached for REVALIDATE_SECONDS
+// in the data cache, which keeps serving stale data if a refresh fails.
+export const dynamic = "force-dynamic";
 
 export default async function DigestPage({ params }: { params: Promise<{ week: string }> }) {
   const { week } = await params;

@@ -4,7 +4,9 @@ import type { Company, FundingRound } from "@/lib/types";
 import DocCard from "@/components/DocCard";
 import { day, money } from "@/lib/format";
 
-export const revalidate = 600;
+// Rendered per request; every apiGet() call is cached for REVALIDATE_SECONDS
+// in the data cache, which keeps serving stale data if a refresh fails.
+export const dynamic = "force-dynamic";
 
 export default async function CompanyPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;

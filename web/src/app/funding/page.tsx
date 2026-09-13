@@ -1,15 +1,16 @@
 import { apiGet } from "@/lib/api";
 import type { FundingRound, Paged } from "@/lib/types";
-import Unavailable from "@/components/Unavailable";
 import { day, money } from "@/lib/format";
 
-export const revalidate = 600;
+// Rendered per request; every apiGet() call is cached for REVALIDATE_SECONDS
+// in the data cache, which keeps serving stale data if a refresh fails.
+export const dynamic = "force-dynamic";
 
 export default async function FundingPage({ searchParams }: { searchParams: Promise<{ days?: string }> }) {
   const { days } = await searchParams;
   const window = [7, 30, 90, 365].includes(Number(days)) ? Number(days) : 90;
   const data = await apiGet<Paged<FundingRound>>(`/funding?since_days=${window}&limit=100`);
-  if (!data) return <Unavailable />;
+  if (!data) return <p className="text-sm text-zinc-500">Nothing here yet.</p>;
   return (
     <div>
       <div className="flex flex-wrap items-baseline justify-between gap-2">

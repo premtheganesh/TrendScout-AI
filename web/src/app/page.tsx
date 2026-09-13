@@ -3,10 +3,11 @@ import { apiGet } from "@/lib/api";
 import type { Digest, DocumentsResponse, Meta, Trends } from "@/lib/types";
 import Markdown from "@/components/Markdown";
 import SourceList from "@/components/SourceList";
-import Unavailable from "@/components/Unavailable";
 import { day, num } from "@/lib/format";
 
-export const revalidate = 600;
+// Rendered per request; every apiGet() call is cached for REVALIDATE_SECONDS
+// in the data cache, which keeps serving stale data if a refresh fails.
+export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const [digest, meta, trends, recent] = await Promise.all([
@@ -16,7 +17,6 @@ export default async function Home() {
     apiGet<DocumentsResponse>("/documents?since_days=7&limit=1"),
   ]);
 
-  if (!meta && !digest) return <Unavailable />;
 
   return (
     <div className="space-y-10">
