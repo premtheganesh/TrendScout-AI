@@ -44,7 +44,8 @@ def name_key(name: str) -> str:
     the same company."""
     if not name or not isinstance(name, str):
         return ''
-    text = _LEGAL_SUFFIX.sub(' ', name.casefold())
+    text = re.sub(r'\s*\([^)]*\)\s*$', '', name)          # "Exploration Company (TEC)"
+    text = _LEGAL_SUFFIX.sub(' ', text.casefold())
     return _NON_ALNUM.sub('', text)
 
 

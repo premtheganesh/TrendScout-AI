@@ -56,6 +56,9 @@ class TestNameKey:
         assert name_key('Suno, Inc.') == 'suno'
         assert name_key('Abridge LLC') == 'abridge'
 
+    def test_drops_a_trailing_parenthesised_alias(self):
+        assert name_key('The Exploration Company (TEC)') == name_key('The Exploration Company')
+
     def test_keeps_ai(self):
         assert name_key('Harvey AI') == 'harveyai'
         assert name_key('Harvey') != name_key('Harvey AI')
