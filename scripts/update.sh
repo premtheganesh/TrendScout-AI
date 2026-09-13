@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 PY="$ROOT/.venv/bin/python"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export TOKENIZERS_PARALLELISM=false   # the pipeline forks after loading tokenizers
 
 echo "== $(date -u +%FT%TZ) update $SCHEDULE =="
 if ! pgrep -x mongod >/dev/null; then

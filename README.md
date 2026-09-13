@@ -255,6 +255,11 @@ scripts/update.sh daily                               # ingest due sources + pip
 scripts/install_schedule.sh                           # launchd: daily 07:30, weekly Mon 08:00
 ```
 
+On macOS, a project under `~/Desktop` or `~/Documents` needs `/bin/bash`
+granted **Full Disk Access** (System Settings → Privacy & Security) before
+launchd can run the jobs; otherwise `logs/daily.log` shows "Operation not
+permitted". `launchctl start com.trendscout.daily` runs a job on demand.
+
 The pipeline is incremental. Each document's `content_hash` is the sha1 of
 exactly the text that gets indexed; entities and embeddings record the
 hash they were computed from, and each stage redoes only rows whose hash

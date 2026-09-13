@@ -482,4 +482,5 @@ Deviations from plan:
 - Deployment itself (accounts + secrets) — `DEPLOY.md`.
 - Replace the dead `GITHUB_TOKEN` in `.env`; start Neo4j Desktop's database once so the `neo4j` pipeline stage can run (everything public works without it).
 - Re-label the 22-query evaluation set against the live corpus before the course report (the frozen 210-document corpus still guards regressions at 0.882).
-- 14 funding articles are queued behind Groq's daily cap; tomorrow's daily job extracts them.
+- ~~14 funding articles are queued behind Groq's daily cap~~ — extracted on 2026-09-13.
+- **The first scheduled run (2026-09-13 07:30) was blocked by macOS**: launchd cannot read `~/Desktop` without Full Disk Access for `/bin/bash`. The install script and README now say how to grant it; until then, `scripts/update.sh daily` by hand does the same work.

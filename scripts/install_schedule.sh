@@ -17,3 +17,14 @@ for job in com.trendscout.daily com.trendscout.weekly; do
   fi
 done
 launchctl list | grep trendscout || true
+
+cat <<'NOTE'
+
+macOS note: if the project lives under ~/Desktop or ~/Documents, launchd jobs
+are blocked by privacy protection and the log shows "Operation not permitted".
+Grant Full Disk Access to /bin/bash once:
+  System Settings -> Privacy & Security -> Full Disk Access -> "+" -> press
+  Cmd+Shift+G, type /bin/bash, add it, toggle on.
+Then test with:  launchctl start com.trendscout.daily ; tail -f logs/daily.log
+(Alternatively keep the project outside ~/Desktop and ~/Documents.)
+NOTE
