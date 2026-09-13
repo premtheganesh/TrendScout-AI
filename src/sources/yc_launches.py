@@ -26,7 +26,7 @@ class YCLaunchesSource(Source):
     name = 'yc_launches'
     doc_type = 'launch'
     source_tag = 'ycombinator'
-    schedule = 'weekly'
+    schedule = 'daily'          # daily so vote counts (and their snapshots) stay fresh
     default_window_days = 7
 
     def __init__(self, max_pages: int = 5):

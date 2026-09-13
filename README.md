@@ -288,14 +288,14 @@ others.
 | --- | --- | --- | --- |
 | `yc_oss` | startup | weekly | Y Combinator directory via the yc-oss JSON mirror; AI-tagged companies from 2023+ batches |
 | `startupsavant` | startup | monthly | StartupSavant's yearly "startups to watch" list (headless browser; local only) |
-| `yc_launches` | launch | weekly | Y Combinator Launches, AI-ish only |
+| `yc_launches` | launch | daily | Y Combinator Launches, AI-ish only |
 | `hn_launches` | launch | daily | Hacker News: Show HN with ≥10 points and an AI title, and every Launch HN |
 | `techcrunch_ai` | article | daily | TechCrunch AI category feed, paged |
 | `crunchbase_news` | article | daily | Crunchbase News feed (funding rounds) |
 | `eu_startups` | article | daily | EU-Startups feed (European rounds) |
 | `google_news` | article | daily | Google News search for AI startup funding; stories already held from their original outlet are skipped by title |
-| `github_new` | repo | weekly | Repositories created in the window for `llm`, `generative-ai`, `ai-agents`, `rag`; top 60 by stars, awesome-lists skipped |
-| `hf_models` | model | weekly | Hugging Face trending models (top 50) |
+| `github_new` | repo | daily | Repositories created in the window for `llm`, `generative-ai`, `ai-agents`, `rag`; top 60 by stars, awesome-lists skipped |
+| `hf_models` | model | daily | Hugging Face trending models (top 50) |
 | `hf_papers` | paper | daily | Hugging Face daily papers, with the GitHub repo each links to |
 
 ### Reproducing the evaluation

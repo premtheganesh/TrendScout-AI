@@ -29,7 +29,7 @@ class GitHubNewReposSource(Source):
     name = 'github_new'
     doc_type = 'repo'
     source_tag = 'github'
-    schedule = 'weekly'
+    schedule = 'daily'          # daily so star counts (and their snapshots) stay fresh
     default_window_days = 7
 
     def __init__(self, topics=DEFAULT_TOPICS, per_topic: int = 50,

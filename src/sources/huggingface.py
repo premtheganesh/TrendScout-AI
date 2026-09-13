@@ -36,7 +36,7 @@ class HFModelsSource(Source):
     name = 'hf_models'
     doc_type = 'model'
     source_tag = 'huggingface'
-    schedule = 'weekly'
+    schedule = 'daily'                  # daily so likes/downloads (and their snapshots) stay fresh
     default_window_days = None          # "trending" is a ranking, not a window
 
     def __init__(self, limit: int = 50):
