@@ -20,6 +20,7 @@ ALIASES = {
     'genai': 'generative-ai', 'gen-ai': 'generative-ai',
     'artificial-intelligence': 'ai', 'machine-learning': 'ml', 'machinelearning': 'ml',
     'agents': 'agent', 'ai-agent': 'agent', 'ai-agents': 'agent', 'agentic-ai': 'agent',
+    'agent-skill': 'agent-skills', 'skills': 'agent-skills', 'agent-skills': 'agent-skills',
     'agentic': 'agent', 'llm-agent': 'agent', 'llm-agents': 'agent', 'multi-agent': 'agent',
     'retrieval-augmented-generation': 'rag', 'rag-pipeline': 'rag',
     'chat-gpt': 'chatgpt', 'gpt4': 'gpt-4', 'text-to-speech': 'tts', 'speech-to-text': 'stt',
@@ -37,7 +38,12 @@ STOP_TOPICS = {
     'open-source', 'ml', 'deep-learning', 'transformers', 'pytorch', 'safetensors',
     'region-us', 'endpoints-compatible', 'eval-results', 'license-mit', 'license-apache-2-0',
     'artificial-intelligence-ai', 'news', 'ai-news', 'fundraising', 'venture', 'funding',
+    'know-how', 'text-generation', 'text-to-text', 'startups-news', 'startup-news', 'interviews',
+    'events', 'other', 'misc', 'uncategorized', 'general', 'featured', 'europe',
 }
+
+# Publisher section tags such as 'uk-startups', 'italy-startups', 'ai-startups'.
+_SECTION_TAG = re.compile(r'^([a-z]+-)?startups?$|^[a-z]+-(news|startups|weekly)$')
 
 FIELDS_BY_TYPE = {
     'repo': ('topics',),
@@ -54,7 +60,7 @@ def normalize_topic(raw: str) -> str:
         return ''
     topic = _NON_ALNUM.sub('-', raw.strip().lower()).strip('-')
     topic = ALIASES.get(topic, topic)
-    if not topic or len(topic) < 2 or topic in STOP_TOPICS:
+    if not topic or len(topic) < 2 or topic in STOP_TOPICS or _SECTION_TAG.match(topic):
         return ''
     return topic
 

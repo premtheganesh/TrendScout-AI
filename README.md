@@ -148,8 +148,11 @@ title, one Groq JSON call per article, schema validation, and a
 **rule-derived confidence**: `high` only when the company name and the
 amount both appear verbatim in the text the model saw, `medium` when the
 company does but the amount is absent or paraphrased, `low` otherwise.
-Rounds covered by several outlets are merged when company, round name,
-amount (±10%) and date (±14 days) agree, keeping every source article.
+Rounds covered by several outlets are merged when the company (ignoring
+a trailing "AI"), the round name where both state one, the amount (±10%,
+±20% across currencies) and the date (±14 days) agree, keeping every
+source article. Roundups, rankings and "in talks" stories never become
+rounds.
 Each article is processed once per version of its text.
 
 Measured on 41 hand-labelled articles (`data/eval/funding_labels.json`,

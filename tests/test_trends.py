@@ -26,11 +26,16 @@ class TestTopics:
         assert normalize_topic('license:mit') == ''
         assert normalize_topic('') == '' and normalize_topic(None) == ''
 
+    def test_drops_publisher_section_tags(self):
+        for tag in ('UK Startups', 'italy-startups', 'Know-how', 'Startups', 'text-generation', 'france-news'):
+            assert normalize_topic(tag) == '', tag
+        assert normalize_topic('agent-skill') == 'agent-skills' == normalize_topic('Agent Skills')
+
     def test_topics_per_type(self):
         repo = {'type': 'repo', 'topics': ['llm', 'agents', 'python', 'LLM']}
         assert document_topics(repo) == ['llm', 'agent']
-        model = {'type': 'model', 'tags': ['text-generation', 'fp8'], 'pipeline_tag': 'text-generation'}
-        assert document_topics(model) == ['text-generation', 'fp8']
+        model = {'type': 'model', 'tags': ['text-generation', 'fp8'], 'pipeline_tag': 'image-text-to-text'}
+        assert document_topics(model) == ['fp8', 'image-text-to-text']   # generic pipeline tags are dropped
         assert document_topics({'type': 'repo'}) == []
 
 

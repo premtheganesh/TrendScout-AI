@@ -56,6 +56,13 @@ class TestResolver:
         r.add_startup(self.startup('a', 'Harvey AI', 'https://harvey.ai'))
         assert r.match(key='harvey') is None          # "Harvey" != "Harvey AI"
 
+    def test_same_name_without_identity_stays_two_companies(self):
+        r = Resolver()
+        a = r.add_startup(self.startup('a', 'Candor'))
+        b = r.add_startup(self.startup('b', 'Candor'))
+        assert a != b and len(r.companies) == 2
+        assert r.match(key='candor') is None
+
     def test_slug_shapes(self):
         assert company_slug('suno', 'suno.com', 'suno') == 'yc-suno'
         assert company_slug('', 'suno.com', 'suno') == 'd-suno-com'

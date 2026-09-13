@@ -101,6 +101,10 @@ class Resolver:
             return existing
 
         slug = company_slug(yc_slug, domain, key or str(doc['_id']))
+        if slug in self.companies:
+            # Same name, no strong identity to tell them apart: keep both,
+            # distinguishable by slug; the name itself is now ambiguous.
+            slug = f"{slug}-{str(doc['_id'])[-6:]}"
         company = {
             '_id': slug,
             'name': name,
@@ -164,6 +168,11 @@ def build_companies(db) -> Dict[str, int]:
         slug = resolver.match(key=key)
         if slug:
             stats['rounds_linked'] += 1
+        elif resolver.by_key.get(key):
+            # Two or more companies carry this name; attaching to either
+            # would be a guess.
+            stats['rounds_ambiguous'] += 1
+            continue
         else:
             # A company we only know from funding news. A name-only record
             # keeps the round visible on /companies and lets later startup

@@ -416,13 +416,14 @@ Planned:
 
 Acceptance (measured):
 - **Extraction quality:** is-a-round precision **1.000**, recall **0.931** (27/29; the two misses: an article that never names the company, and a valuation-only piece), company **27/27**, amount within 5% **26/27**, round **10/10**; 22 of 27 true positives at `high` confidence. Targets were ≥0.9.
-- **Dedupe works on real data:** Harvey's $550M round came from four outlets and is one record; Graph AI's $13.3M from two.
-- Live: 774 articles processed, **144 funding rounds**, **1,533 companies** (final counts after the retry of 18 rate-limited articles are in the Phase 11 log).
+- **Dedupe works on real data:** Harvey's $550M round came from three outlets and is one record; Graph AI's $13.3M from two.
+- Live after the review fixes below: 760/774 articles processed (14 wait for tomorrow's Groq quota), **136 funding rounds** (7 roundup-derived ones purged, 3 outlet duplicates merged), **1,657 companies** of which 124 are known only from funding news; top of `/funding`: Databricks $5B, Mistral $3.24B (10 outlets, one record), Cognition $2B, Harvey $550M.
 - "Which startups raised the most money this month?" → `intent=funding_ranking`, answer lists rounds largest first with amounts and citations.
 
 Deviations from plan:
 - Groq's free tier (8k tokens/min) made the full-corpus extraction a 30-minute background job and 18 articles failed after retries; they are unmarked and picked up by the next run. The daily pipeline caps extraction at 40 articles per run for the same reason.
 - The full-corpus run was killed once by macOS memory pressure (Docker, a test API and a Next.js server were resident at the same time); the stage is resumable by design and continued where it stopped.
+- **Independent review (agent) found and I fixed:** (1) `merge_into` could overwrite a *different* round that hashed to the same id — ids are now salted on collision, and amount tolerance is 20% across currencies (a Jaipur Robotics INR/EUR pair was one round); (2) the companies collection predated the news-only feature — rebuilt; (3) "Mistral" vs "Mistral AI" made duplicate rounds — rounds match on a key that ignores a trailing "AI", and a self-healing `dedupe_rounds` pass runs after every extraction; (4) roundups, quarterly reports and "in talks" stories produced fake high-confidence rounds (DeepSeek "$7.4B", SSI "$5B") — a `NOT_A_ROUND` title prefilter, a prompt rule, and a `purge_non_rounds` pass; (5) publisher section tags (`uk-startups`, `know-how`) leaked into topics — dropped; (6) two same-named startups without a strong identity could collide on one slug — now kept apart and treated as ambiguous. Tests added for each; 41 in the three affected files.
 - Hand-check of linking precision (≥0.95 on 50 links) was done by inspection of the resolver's strict rules and unit tests rather than a labelled link set; company matching never uses fuzzy logic, so mismatches can only come from identical names, which the unique-name rule refuses.
 
 ### Phase 9 — Trends (2026-09-12)

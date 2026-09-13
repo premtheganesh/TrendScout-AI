@@ -8,8 +8,9 @@ from conftest import needs_mongo
 from src.corpus.schema import ensure_indexes
 from src.corpus.types import COLLECTION
 from src.extraction.funding import (EXTRACTION_VERSION, FUNDING_ROUNDS, ExtractedRound,
-                                    amount_usd, confidence_for, extract_stale, merge_into,
-                                    same_round, to_record)
+                                    amount_usd, confidence_for, dedupe_rounds, extract_stale,
+                                    is_single_announcement, merge_into, purge_non_rounds,
+                                    round_key, same_round, to_record)
 
 T = datetime(2026, 9, 10, tzinfo=timezone.utc)
 
@@ -135,3 +136,76 @@ class TestMergeAndExtract:
 
         stored = db[FUNDING_ROUNDS].find_one()
         assert stored['confidence'] == 'high' and stored['amount_usd'] == 5_000_000
+
+
+class TestNotARound:
+    def test_roundups_and_rumours_are_filtered_before_the_model(self):
+        for title in ("The Week's 10 Biggest Funding Rounds: Cognition Leads", "Funding Wrap: three startups raise",
+                      "AI Firm Cohere in Talks for Up to $3 Billion Raise", "Positron reportedly raising at $5B",
+                      "China And AI Lead Asia's Startup Funding To Multiyear Peak In Q2", "Weekly funding round-up!"):
+            assert not is_single_announcement(title), title
+
+    def test_single_announcements_pass(self):
+        for title in ("Harvey raises $550M at $15.5B valuation", "Graph AI raises $13.3M in Series A funding led by Insight"):
+            assert is_single_announcement(title), title
+
+
+class TestRoundKey:
+    def test_drops_a_trailing_ai(self):
+        assert round_key('mistralai') == 'mistral' == round_key('mistral')
+        assert round_key('cognitionai') == 'cognition'
+        assert round_key('ai') == 'ai'                       # too short to strip
+
+    def test_same_round_across_ai_suffix(self):
+        a = record('Mistral', 3e9, 'EUR', None)
+        b = record('Mistral AI', 3.5e9, 'USD', None, doc='a2')   # €3B ≈ $3.24B, within 20%
+        assert same_round(a, b)
+
+
+@needs_mongo
+class TestSelfHealing:
+    @pytest.fixture
+    def db(self):
+        from pymongo import MongoClient
+        from src.config import get_settings
+        client = MongoClient(get_settings().mongodb_uri, tz_aware=True)
+        name = 'trendscout_test_funding2'
+        client.drop_database(name)
+        database = client[name]
+        ensure_indexes(database)
+        yield database
+        client.drop_database(name)
+        client.close()
+
+    def test_id_collision_does_not_overwrite_a_different_round(self, db):
+        rid1, _ = merge_into(db, record('Jaipur Robotics', 47e7, 'INR', 'seed', doc='a1'))     # $5.64M
+        rid2, how = merge_into(db, record('Jaipur Robotics', 1e6, 'USD', 'seed', doc='a2'))    # clearly different
+        assert how == 'new' and rid1 != rid2
+        assert db[FUNDING_ROUNDS].count_documents({}) == 2
+
+    def test_dedupe_merges_ai_suffix_variants(self, db):
+        db[FUNDING_ROUNDS].insert_many([
+            {**record('Mistral', 3e9, 'EUR', None, doc='a1'), '_id': 'r1', 'extracted_at': T},
+            {**record('Mistral AI', 3.5e9, 'USD', None, doc='a2'), '_id': 'r2', 'extracted_at': T + timedelta(hours=1)},
+        ])
+        db[COLLECTION].insert_one({'_id': 'a2', 'type': 'article', 'doc_key': 'k', 'funding_round_id': 'r2'})
+        assert dedupe_rounds(db) == 1
+        left = list(db[FUNDING_ROUNDS].find())
+        assert len(left) == 1 and set(left[0]['source_doc_ids']) == {'a1', 'a2'}
+        assert db[COLLECTION].find_one({'_id': 'a2'})['funding_round_id'] == left[0]['_id']
+        assert dedupe_rounds(db) == 0
+
+    def test_purge_removes_rounds_whose_only_sources_are_roundups(self, db):
+        from bson import ObjectId
+        good, bad = ObjectId(), ObjectId()
+        db[COLLECTION].insert_many([
+            {'_id': good, 'type': 'article', 'doc_key': 'k1', 'title': 'Harvey raises $550M', 'funding_round_id': 'r1'},
+            {'_id': bad, 'type': 'article', 'doc_key': 'k2', 'title': "The Week's 10 Biggest Funding Rounds", 'funding_round_id': 'r2'},
+        ])
+        db[FUNDING_ROUNDS].insert_many([
+            {'_id': 'r1', 'company_key': 'harvey', 'source_doc_ids': [str(good)]},
+            {'_id': 'r2', 'company_key': 'ssi', 'source_doc_ids': [str(bad)]},
+        ])
+        assert purge_non_rounds(db) == 1
+        assert db[FUNDING_ROUNDS].count_documents({}) == 1
+        assert db[COLLECTION].find_one({'_id': bad})['funding_round_id'] is None
