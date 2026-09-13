@@ -33,10 +33,10 @@ jobs:
         run: |
           pip install -r requirements/pipeline.txt
           pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl
-      - name: Ingest weekly sources
-        run: python scripts/ingest.py --schedule weekly
+      - name: Ingest every scheduled source
+        run: python scripts/ingest.py --schedule weekly --schedule daily
       - name: Process what changed
-        run: python scripts/run_pipeline.py --stages refresh,entities,embed,snapshots,funding,companies,trends --funding-limit 120
+        run: python scripts/run_pipeline.py --stages refresh,entities,embed,snapshots,funding,companies,trends --funding-limit 150
       - name: Write last week's digest
         run: python scripts/generate_digest.py --week previous
       - name: Tell the API to rebuild its indexes

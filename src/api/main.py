@@ -719,7 +719,7 @@ def trends(week: Optional[str] = Query(default=None, pattern=r'^\d{4}-W\d{2}$'),
 
 @app.get("/trends/velocity")
 def trends_velocity(type: str = Query(default='repo', pattern='^(repo|model|paper|launch)$'),
-                    days: int = Query(default=7, ge=2, le=90),
+                    days: int = Query(default=14, ge=2, le=90),
                     limit: int = Query(default=20, ge=1, le=100)):
     """Documents that gained the most stars / likes / upvotes / points in the window."""
     from src.trends.compute import velocity

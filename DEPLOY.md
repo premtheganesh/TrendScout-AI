@@ -73,7 +73,8 @@ accounts and the secrets they issue.
 
    The free tier sleeps after 48 h without traffic; the first request
    after that takes about a minute (index build; the model is in the
-   image). The daily pipeline's `/admin/reload` call keeps it awake.
+   image). With a weekly schedule it will sleep between runs; the first
+   visitor of the week wakes it.
 
 ## 3. GitHub Actions (the pipeline)
 
@@ -89,8 +90,7 @@ Repository → Settings → Secrets and variables → Actions:
 `GITHUB_TOKEN` is provided automatically and is enough for the GitHub
 search API. Workflows:
 
-- `.github/workflows/daily.yml` — 07:30 UTC: daily sources → pipeline → reload
-- `.github/workflows/weekly.yml` — Monday 08:00 UTC: weekly sources → pipeline → last week's digest → reload
+- `.github/workflows/weekly.yml` — Monday 08:00 UTC: every source → pipeline → last week's digest → reload
 - `.github/workflows/tests.yml` — offline tests + web lint/typecheck on every push
 
 Run either manually first (Actions → workflow → Run workflow) and read
@@ -123,16 +123,16 @@ Then open the site and ask "Which AI startups launched this week?".
 | Cloud | Local |
 |---|---|
 | Atlas | `brew services start mongodb-community` |
-| GitHub Actions cron | `scripts/install_schedule.sh` (launchd) |
+| GitHub Actions cron | `scripts/install_schedule.sh` (launchd, Monday 08:00) |
 | HF Space | `python src/api/main.py` |
 | Vercel | `cd web && npm run dev` |
 
 ## Costs and limits to know
 
 - Groq free tier: ~8,000 tokens/minute **and 200,000 tokens/day**. The
-  digest and funding extraction back off on the per-minute limit; the daily
-  cap is why extraction is limited to 40 articles per daily run and why a
-  first full-corpus run takes more than one day.
+  digest and funding extraction back off on the per-minute limit; the weekly
+  run caps extraction at 150 articles; a first full-corpus run can take
+  more than one day.
 - Atlas M0: 512 MB, shared CPU. Fine for tens of thousands of documents.
 - Spaces free CPU: 16 GB RAM, sleeps after 48 h idle.
 - Vercel Hobby: plenty for a project site.

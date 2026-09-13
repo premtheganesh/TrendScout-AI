@@ -34,8 +34,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--source', action='append', help='run only this source (repeatable)')
-    parser.add_argument('--schedule', choices=['daily', 'weekly', 'monthly'],
-                        help='run only sources with this schedule')
+    parser.add_argument('--schedule', action='append', choices=['daily', 'weekly', 'monthly'],
+                        help='run only sources with this schedule (repeatable)')
     parser.add_argument('--since', help='ISO date; overrides the source default window')
     parser.add_argument('--days', type=int, help='window in days; overrides the default')
     parser.add_argument('--max-pages', type=int,
@@ -53,7 +53,7 @@ def main():
 
     selected = list(sources.values())
     if args.schedule:
-        selected = [s for s in selected if s.schedule == args.schedule]
+        selected = [s for s in selected if s.schedule in args.schedule]
     if args.source:
         unknown = [n for n in args.source if n not in sources]
         if unknown:

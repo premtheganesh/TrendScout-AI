@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 export default async function TrendsPage() {
   const [trends, repos, models] = await Promise.all([
     apiGet<Trends>("/trends?limit=25"),
-    apiGet<Velocity>("/trends/velocity?type=repo&days=7"),
-    apiGet<Velocity>("/trends/velocity?type=model&days=7"),
+    apiGet<Velocity>("/trends/velocity?type=repo&days=14"),
+    apiGet<Velocity>("/trends/velocity?type=model&days=14"),
   ]);
   if (!trends) return <p className="text-sm text-zinc-500">No trend data yet.</p>;
   return (
@@ -52,8 +52,8 @@ export default async function TrendsPage() {
       </div>
 
       <div className="grid gap-8 md:grid-cols-2">
-        <VelocityList v={repos} title="Repos gaining stars (7d)" />
-        <VelocityList v={models} title="Models gaining likes (7d)" />
+        <VelocityList v={repos} title="Repos gaining stars (14d)" />
+        <VelocityList v={models} title="Models gaining likes (14d)" />
       </div>
     </div>
   );
@@ -64,7 +64,7 @@ function VelocityList({ v, title }: { v: Velocity | null; title: string }) {
     <section>
       <h2 className="text-lg font-semibold">{title}</h2>
       {!v || v.insufficient_history ? (
-        <p className="mt-2 text-sm text-zinc-500">Not enough snapshot history yet — the daily pipeline records counts each day, and velocity needs two days.</p>
+        <p className="mt-2 text-sm text-zinc-500">Not enough snapshot history yet — the weekly pipeline records counts on each run, and velocity needs two runs.</p>
       ) : (
         <ul className="mt-2 space-y-1 text-sm">
           {v.items.map((r) => (

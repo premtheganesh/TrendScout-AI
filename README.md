@@ -251,23 +251,28 @@ python scripts/ingest.py --dry-run                     # fetch + normalise, writ
 python scripts/run_pipeline.py                        # everything that changed
 python scripts/run_pipeline.py --stages embed,index   # some stages
 python scripts/run_pipeline.py --force                # redo every document
-scripts/update.sh daily                               # ingest due sources + pipeline + API reload
-scripts/install_schedule.sh                           # launchd: daily 07:30, weekly Mon 08:00
+scripts/update.sh weekly                              # every source + pipeline + digest + API reload
+scripts/install_schedule.sh                           # launchd: every Monday 08:00
 ```
 
-On macOS, a project under `~/Desktop` or `~/Documents` needs `/bin/bash`
-granted **Full Disk Access** (System Settings → Privacy & Security) before
-launchd can run the jobs; otherwise `logs/daily.log` shows "Operation not
-permitted". `launchctl start com.trendscout.daily` runs a job on demand.
+On macOS, launchd cannot read a project under `~/Desktop` or `~/Documents`
+("Operation not permitted" in `logs/weekly.log`) unless `/bin/bash` has Full
+Disk Access; keeping the project elsewhere (e.g. `~/Projects`) needs no
+permission. `launchctl start com.trendscout.weekly` runs the job on demand.
+
+The schedule is weekly: one Monday job scrapes every source, processes
+what changed, writes the previous week's digest and reloads the API.
+Sources also carry a `daily` tag for `scripts/update.sh daily`, which is
+available on demand but not scheduled.
 
 The pipeline is incremental. Each document's `content_hash` is the sha1 of
 exactly the text that gets indexed; entities and embeddings record the
 hash they were computed from, and each stage redoes only rows whose hash
-moved. A daily run with 50 new articles extracts and embeds 50 documents,
+moved. A run with 50 new articles extracts and embeds 50 documents,
 then rebuilds FAISS and BM25 from stored vectors in well under a second.
 Star counts are kept out of the indexed text on purpose, so a weekly star
 tick does not force a re-embed; their history goes to `metric_snapshots`
-instead, one row per document per day.
+instead, one row per document per run.
 
 A running API picks up new indexes without a restart:
 `POST /admin/reload` with `Authorization: Bearer $ADMIN_TOKEN`. `GET /meta`

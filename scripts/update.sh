@@ -1,8 +1,8 @@
 #!/bin/bash
-# Scheduled refresh: ingest the sources due, process what changed, tell the
-# API to reload. Run from anywhere:
-#     scripts/update.sh daily
-#     scripts/update.sh weekly
+# Scheduled refresh: ingest, process what changed, write the digest, tell
+# the API to reload. The schedule is weekly (Monday 08:00). Run from anywhere:
+#     scripts/update.sh weekly     # every source, then the previous week's digest
+#     scripts/update.sh daily      # on demand: only the sources marked daily
 set -uo pipefail
 SCHEDULE="${1:-daily}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,13 +19,13 @@ if ! pgrep -x mongod >/dev/null; then
 fi
 
 if [ "$SCHEDULE" = "weekly" ]; then
-  "$PY" scripts/ingest.py --schedule weekly
+  "$PY" scripts/ingest.py --schedule weekly --schedule daily
 else
   "$PY" scripts/ingest.py --schedule daily
 fi
 INGEST_STATUS=$?
 
-"$PY" scripts/run_pipeline.py
+"$PY" scripts/run_pipeline.py --funding-limit 150
 PIPELINE_STATUS=$?
 
 if [ "$SCHEDULE" = "weekly" ]; then

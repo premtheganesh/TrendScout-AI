@@ -97,7 +97,7 @@ def rising_topics(db, week: str, limit: int = 20) -> Dict[str, Any]:
     }
 
 
-def velocity(db, doc_type: str = 'repo', days: int = 7, limit: int = 20,
+def velocity(db, doc_type: str = 'repo', days: int = 14, limit: int = 20,
              now: Optional[datetime] = None) -> Dict[str, Any]:
     """Metric gained over the window, from snapshots. Needs at least two
     snapshots on different days per document to say anything."""

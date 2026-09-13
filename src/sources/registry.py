@@ -26,9 +26,9 @@ def build_sources() -> Dict[str, Source]:
                   url='https://techcrunch.com/category/artificial-intelligence/feed/',
                   source_tag='techcrunch', max_pages=5),
         RSSSource(name='crunchbase_news', url='https://news.crunchbase.com/feed/',
-                  source_tag='crunchbase'),
+                  source_tag='crunchbase', max_pages=5),
         RSSSource(name='eu_startups', url='https://www.eu-startups.com/feed/',
-                  source_tag='eu-startups'),
+                  source_tag='eu-startups', max_pages=8),
         GoogleNewsSource(),
         # open source & models
         GitHubNewReposSource(),
