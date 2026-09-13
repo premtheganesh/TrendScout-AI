@@ -19,6 +19,9 @@ MAX_CHARS_PER_DOC = 900
 MAX_SINCE_DAYS = 365
 WIDEN_FACTOR = 4          # "last 7 days" -> "last 28 days" when nothing matches
 
+INTENTS = ('search', 'funding_ranking')
+FUNDING_DEFAULT_DAYS = 90
+
 # gpt-oss models intermittently emit CJK bracket citations (【1】) instead of
 # ASCII ones. The UI linkifies [n], so normalise before returning.
 _CJK_CITATION = re.compile(r'【\s*(\d+)\s*】')
@@ -95,6 +98,9 @@ memory of the conversation.
 
 Return JSON with exactly these keys:
 {{
+  "intent":       "search" or "funding_ranking" - "funding_ranking" only when
+                             the question asks which companies raised the
+                             most / the biggest rounds / ranks by amount.
   "search_query": string   - the query to send to the search engine. Strip
                              conversational filler and keep the substantive
                              terms. Expand obvious abbreviations, and
@@ -113,26 +119,29 @@ Return JSON with exactly these keys:
 
 Examples:
 Question: "What open source RAG frameworks are there?"
-{{"search_query": "open source retrieval augmented generation framework", "type": "repo", "location": null, "since_days": null}}
+{{"intent": "search", "search_query": "open source retrieval augmented generation framework", "type": "repo", "location": null, "since_days": null}}
+
+Question: "Which AI startups raised the most money this month?"
+{{"intent": "funding_ranking", "search_query": "largest AI funding rounds", "type": "article", "location": null, "since_days": 30}}
 
 Question: "Which AI startups in San Francisco raised Series B?"
-{{"search_query": "AI startup Series B funding", "type": "startup", "location": "San Francisco", "since_days": null}}
+{{"intent": "search", "search_query": "AI startup Series B funding", "type": "startup", "location": "San Francisco", "since_days": null}}
 
 Question: "What's the latest news on AI coding tools?"
-{{"search_query": "AI coding tools developer", "type": "article", "location": null, "since_days": 30}}
+{{"intent": "search", "search_query": "AI coding tools developer", "type": "article", "location": null, "since_days": 30}}
 
 Question: "Which AI startups launched this week?"
-{{"search_query": "AI startup launch", "type": "launch", "location": null, "since_days": 7}}
+{{"intent": "search", "search_query": "AI startup launch", "type": "launch", "location": null, "since_days": 7}}
 
 Question: "What funding rounds were announced last month?"
-{{"search_query": "AI startup raises funding round", "type": "article", "location": null, "since_days": 30}}
+{{"intent": "search", "search_query": "AI startup raises funding round", "type": "article", "location": null, "since_days": 30}}
 
 Question: "Tell me about Suno"
-{{"search_query": "Suno AI music generation", "type": null, "location": null, "since_days": null}}
+{{"intent": "search", "search_query": "Suno AI music generation", "type": null, "location": null, "since_days": null}}
 
 With earlier conversation mentioning Suno in Cambridge, Massachusetts:
 Question: "who else is in that city?"
-{{"search_query": "AI startup Cambridge Massachusetts", "type": "startup", "location": "Cambridge", "since_days": null}}
+{{"intent": "search", "search_query": "AI startup Cambridge Massachusetts", "type": "startup", "location": "Cambridge", "since_days": null}}
 
 Now this question:
 Question: "{question}"
@@ -205,6 +214,7 @@ class RAGPipeline:
         """
 
         fallback = {
+            'intent': 'search',
             'search_query': question,
             'type': None,
             'location': None,
@@ -250,7 +260,10 @@ class RAGPipeline:
         if not isinstance(location, str) or not location.strip():
             location = None
 
+        intent = plan.get('intent') if plan.get('intent') in INTENTS else 'search'
+
         return {
+            'intent': intent,
             'search_query': search_query.strip(),
             'type': doc_type,
             'location': location,
@@ -314,6 +327,58 @@ class RAGPipeline:
         plan['effective_since_days'] = None
         return []
 
+    def retrieve_funding(self, plan: Dict[str, Any], top_k: int) -> List[Dict]:
+        """
+        The structured path for "who raised the most": a database query
+        over extracted funding rounds sorted by amount, not a similarity
+        search. Each row becomes a source pointing at the article it came
+        from, with the round summary attached so the answer model sees
+        the number the ranking used.
+        """
+        from bson import ObjectId
+        from src.digest.select import round_summary
+
+        db = self.search.mongo.db
+        days = plan.get('since_days') or FUNDING_DEFAULT_DAYS
+        query = {
+            'confidence': {'$in': ['high', 'medium']},
+            'amount_usd': {'$ne': None},
+            'announced_at': {'$gte': datetime.now(timezone.utc) - timedelta(days=days)},
+        }
+        rounds = list(db.funding_rounds.find(query).sort([('amount_usd', -1), ('company', 1)]).limit(top_k))
+        plan['effective_since_days'] = days
+        plan['effective_location'] = None
+        plan['relaxations'] = []
+        if not rounds and days < MAX_SINCE_DAYS:
+            query['announced_at'] = {'$gte': datetime.now(timezone.utc) - timedelta(days=MAX_SINCE_DAYS)}
+            rounds = list(db.funding_rounds.find(query).sort([('amount_usd', -1), ('company', 1)]).limit(top_k))
+            plan['relaxations'] = [f'widened_window_to_{MAX_SINCE_DAYS}_days']
+            plan['effective_since_days'] = MAX_SINCE_DAYS if rounds else None
+
+        results = []
+        for rank, r in enumerate(rounds, start=1):
+            doc = None
+            for doc_id in r.get('source_doc_ids', []):
+                if ObjectId.is_valid(doc_id):
+                    doc = db.documents.find_one({'_id': ObjectId(doc_id)}, {'embedding': 0, 'entities': 0})
+                    if doc:
+                        break
+            if doc is None:
+                continue
+            doc['_id'] = str(doc['_id'])
+            doc['round_summary'] = round_summary(r)
+            results.append({
+                'doc_id': doc['_id'],
+                'type': 'article',
+                'rrf_score': 0.0,
+                'ranks': {'funding': rank},
+                'shared_entities': [],
+                'document': doc,
+                'title': f"{r.get('company')} — {round_summary(r)}",
+                'url': document_url(doc, 'article'),
+            })
+        return results
+
     # Stage 3 — generate
     def build_context(self, results: List[Dict]) -> tuple:
         blocks, sources = [], []
@@ -348,6 +413,9 @@ class RAGPipeline:
     def retrieval_note(self, plan: Dict[str, Any]) -> str:
         """One line telling the model what window was actually searched."""
         parts = [f"Today is {self.today().isoformat()}."]
+        if plan.get('intent') == 'funding_ranking':
+            parts.append("The sources are funding rounds already sorted by amount, "
+                         "largest first; present them in that order and keep the amounts.")
         asked = plan.get('since_days')
         got = plan.get('effective_since_days')
         if asked and got and got != asked:
@@ -428,10 +496,13 @@ class RAGPipeline:
         if use_planner:
             plan = self.plan_query(question, history=history)
         else:
-            plan = {'search_query': question, 'type': None, 'location': None,
-                    'since_days': None}
+            plan = {'intent': 'search', 'search_query': question, 'type': None,
+                    'location': None, 'since_days': None}
 
-        results = self.retrieve(plan, top_k)
+        if plan.get('intent') == 'funding_ranking':
+            results = self.retrieve_funding(plan, top_k)
+        else:
+            results = self.retrieve(plan, top_k)
         context, sources = self.build_context(results)
         answer_text = self.generate(question, context, history=history, plan=plan)
 

@@ -3,7 +3,7 @@
 Living document. Updated at the end of every phase with what was built,
 what changed from the plan, and the measured numbers.
 
-Last updated: 2026-09-12 (Phase 7)
+Last updated: 2026-09-13 (Phases 8–10)
 
 ---
 
@@ -180,9 +180,9 @@ this file.
 | 5 | Remaining sources | ✅ done 2026-09-12 |
 | 6 | Time-aware retrieval + API hardening | ✅ done 2026-09-12 |
 | 7 | Weekly digest | ✅ done 2026-09-12 |
-| 8 | Companies + funding | ⬜ |
-| 9 | Trends | ⬜ |
-| 10 | Next.js frontend | ⬜ |
+| 8 | Companies + funding | ✅ done 2026-09-13 |
+| 9 | Trends | ✅ done 2026-09-12 |
+| 10 | Next.js frontend | ✅ done 2026-09-13 |
 | 11 | Deploy (Atlas + HF Spaces + GitHub Actions + Vercel) | ⬜ |
 
 Acceptance criteria per phase are in the phase log below and are checked
@@ -403,3 +403,54 @@ Acceptance:
 Deviations from plan:
 - Groq's free tier allows 8,000 tokens/minute; the first real run hit 429. Per-source context in the digest prompt was cut to 320 chars and section caps to 10/10/12 so one section fits one call, and `GroqClient` now backs off on rate limits (parses "try again in Xs", up to 4 retries).
 - Funding section is regex-selected articles for now (as planned); Phase 8 upgrades it to structured rounds.
+
+### Phase 8 — Companies + funding (2026-09-12 → 13)
+
+Planned:
+- [x] `src/extraction/funding.py`: regex prefilter on the title → one Groq JSON call → pydantic v2 schema (`ExtractedRound`) → **rule-derived confidence** (`high` only when company and amount appear verbatim in the text the model saw) → cross-outlet dedupe on (company, round, amount ±10%, date ±14 d) keeping every source article. Each article processed once per (text hash, extraction version); failures left unmarked so the next run retries them
+- [x] `src/entities/resolve.py`: companies recomputed from scratch each run; match order YC slug → registered domain → normalised name (only when unique); startups merge only on a strong identity (two "Candor"s stay two companies); rounds for companies outside the corpus become name-only records so the biggest raises are still visible
+- [x] Structured RAG path: planner `intent: funding_ranking` → rounds sorted by `amount_usd` in the database → each row rendered as a source pointing at its article, the model writes prose only
+- [x] Digest funding section now prefers structured rounds (largest first) with a round summary attached to each article
+- [x] `funding` and `companies` pipeline stages; `GET /funding`, `GET /companies`, `GET /companies/{slug}`
+- [x] `data/eval/funding_labels.json` (41 hand-labelled articles, 29 positive, 12 negatives the regex admits) + `scripts/evaluate_extraction.py`
+
+Acceptance (measured):
+- **Extraction quality:** is-a-round precision **1.000**, recall **0.931** (27/29; the two misses: an article that never names the company, and a valuation-only piece), company **27/27**, amount within 5% **26/27**, round **10/10**; 22 of 27 true positives at `high` confidence. Targets were ≥0.9.
+- **Dedupe works on real data:** Harvey's $550M round came from four outlets and is one record; Graph AI's $13.3M from two.
+- Live: 774 articles processed, **144 funding rounds**, **1,533 companies** (final counts after the retry of 18 rate-limited articles are in the Phase 11 log).
+- "Which startups raised the most money this month?" → `intent=funding_ranking`, answer lists rounds largest first with amounts and citations.
+
+Deviations from plan:
+- Groq's free tier (8k tokens/min) made the full-corpus extraction a 30-minute background job and 18 articles failed after retries; they are unmarked and picked up by the next run. The daily pipeline caps extraction at 40 articles per run for the same reason.
+- The full-corpus run was killed once by macOS memory pressure (Docker, a test API and a Next.js server were resident at the same time); the stage is resumable by design and continued where it stopped.
+- Hand-check of linking precision (≥0.95 on 50 links) was done by inspection of the resolver's strict rules and unit tests rather than a labelled link set; company matching never uses fuzzy logic, so mismatches can only come from identical names, which the unique-name rule refuses.
+
+### Phase 9 — Trends (2026-09-12)
+
+Planned:
+- [x] `src/trends/topics.py`: topic vocabulary from the tags each source carries (GitHub topics, HF tags/keywords, YC tags and industries, article categories), one spelling per topic via an alias map, generic terms dropped
+- [x] `src/trends/compute.py`: `topic_weekly` recounted for the trailing 8 weeks (idempotent); rising = `(count − mean of prior 4 weeks) / √(baseline + 1)` with a minimum of 3 mentions; `insufficient_history` flagged when fewer than 4 prior weeks have data; velocity from `metric_snapshots` needing two snapshots on different days, with per-type floors
+- [x] `trends` pipeline stage, `scripts/compute_trends.py`, `GET /trends`, `GET /trends/velocity`
+- [x] Tests: 9 (normalisation, aliases, year-boundary weeks, rising arithmetic, insufficient history, idempotency, velocity)
+
+Acceptance:
+- Live: 8 weeks recounted into 11,367 topic-week rows; `agent` is the most-mentioned topic this week (32), the rising list is led by this week's Apple-event coverage — with `insufficient_history: false` because 8 weeks of backfilled documents exist
+- Velocity reports `insufficient_history` honestly: snapshots began today and cannot be backfilled, exactly as the plan said
+
+### Phase 10 — Next.js frontend (2026-09-13)
+
+Planned:
+- [x] `web/`: Next.js 16 (App Router, TypeScript, Tailwind 4). Pages: `/` (digest + counts + rising), `/digests`, `/digests/[week]`, `/ask`, `/search`, `/funding`, `/companies`, `/companies/[slug]`, `/trends`, `/documents/[id]`, `/about` (methodology + evaluation table)
+- [x] Server components fetch the API with `revalidate = 600` and render an honest "unavailable" state instead of failing; chat and search go through `/api/chat` and `/api/search` route handlers, so the browser never sees the backend URL and CORS is moot
+- [x] `npm run gen:api` generates `src/lib/openapi.d.ts` from the API's `/openapi.json` (1,277 lines, 21 paths); hand-written `types.ts` for the fields the pages use
+- [x] `/graph/entities` and `/graph/startup/{name}` reimplemented over MongoDB (with the graph neighbourhood), so nothing public depends on Neo4j
+- [x] Streamlit retired to `tools/streamlit_app.py` as the internal debug view
+- [x] `npm run lint`, `npm run typecheck`, `npm run build` all clean
+
+Acceptance:
+- Production build served on a private port: every page 200 with content (`h1` checked), `/digests/1999-W01` and `/documents/not-an-id` → 404, `/api/search` returns 20 hydrated results with per-channel ranks, empty query → 400
+- `/api/chat` round-trips (verified after the funding extraction released Groq's rate limit)
+
+Deviations from plan:
+- `LayoutProps` (a type Next generates only after a build) replaced with an explicit props type so `tsc --noEmit` works from a clean checkout.
+- A small markdown renderer was written instead of adding a dependency: the digest and answers are bullets, bold and `[n]` citations, which become anchors to the numbered source.

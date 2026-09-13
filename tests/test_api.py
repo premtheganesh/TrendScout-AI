@@ -209,6 +209,25 @@ class TestDocumentsEndpoint:
         assert client.get('/documents/not-an-id').status_code == 404
 
 
+class TestFundingAndCompanies:
+    def test_funding_is_sorted_by_amount(self, client):
+        payload = client.get('/funding', params={'limit': 10}).json()
+        amounts = [r['amount_usd'] or 0 for r in payload['items']]
+        assert amounts == sorted(amounts, reverse=True)
+        assert all(r['confidence'] in ('high', 'medium') for r in payload['items'])
+
+    def test_companies_list_and_detail(self, client):
+        listing = client.get('/companies', params={'limit': 3}).json()
+        assert listing['total'] > 0 and listing['items']
+        slug = listing['items'][0]['_id']
+        detail = client.get(f'/companies/{slug}').json()
+        assert detail['name'] and 'documents' in detail and 'rounds' in detail
+
+    def test_company_search_and_404(self, client):
+        assert client.get('/companies', params={'q': 'zzzz-no-such-company'}).json()['count'] == 0
+        assert client.get('/companies/no-such-slug').status_code == 404
+
+
 class TestDigestEndpoints:
     def test_list_and_latest_agree(self, client):
         listing = client.get('/digests').json()
@@ -278,6 +297,23 @@ class TestStatsEndpoint:
     def test_neo4j_status_is_reported_not_fatal(self, client):
         # Graph endpoints degrade to 503; the rest of the API must stay up.
         assert 'status' in client.get('/stats').json()['neo4j']
+
+
+class TestGraphOverMongo:
+    def test_top_entities_need_no_neo4j(self, client):
+        payload = client.get('/graph/entities', params={'limit': 5, 'entity_type': 'org'}).json()
+        assert payload['count'] == 5
+        assert all(e['type'] == 'ORG' for e in payload['entities'])
+        mentions = [e['mentions'] for e in payload['entities']]
+        assert mentions == sorted(mentions, reverse=True)
+
+    def test_startup_neighbourhood(self, client):
+        payload = client.get('/graph/startup/Suno').json()
+        assert payload['startup'].lower() == 'suno' and payload['entities']
+        assert 'neighbours' in payload
+
+    def test_unknown_startup_is_404(self, client):
+        assert client.get('/graph/startup/NoSuchCompanyXYZ').status_code == 404
 
 
 class TestGraphEndpointsDegrade:

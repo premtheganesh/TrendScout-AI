@@ -32,6 +32,8 @@ def main():
                         help=f"comma-separated subset of {','.join(STAGES)}")
     parser.add_argument('--force', action='store_true', help='treat every document as stale')
     parser.add_argument('--neo4j-fresh', action='store_true', help='clear Neo4j before syncing')
+    parser.add_argument('--funding-limit', type=int, default=40,
+                        help='max articles to run funding extraction on this run')
     args = parser.parse_args()
 
     stages = [s.strip() for s in args.stages.split(',') if s.strip()]
@@ -46,7 +48,7 @@ def main():
           + ("  [FORCE]" if args.force else ""))
     print("=" * 72)
 
-    pipeline = Pipeline(mongo.db)
+    pipeline = Pipeline(mongo.db, funding_limit=args.funding_limit)
     if args.neo4j_fresh:
         from src.pipeline.graph import sync_graph
         pipeline.run_stage = _with_fresh_neo4j(pipeline.run_stage, sync_graph, mongo.db)

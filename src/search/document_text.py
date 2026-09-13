@@ -172,6 +172,8 @@ def document_context(doc: Dict, doc_type: str = None, max_chars: int = 900) -> s
     """The text an answer model should see: the indexed text plus the
     dated, numeric facts the index deliberately leaves out."""
     text = document_text(doc, doc_type)[:max_chars]
+    if doc.get('round_summary'):
+        text = f"{doc['round_summary']}\n{text}"
     extras = []
     for field, label in _CONTEXT_METRICS:
         value = doc.get(field)

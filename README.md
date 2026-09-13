@@ -139,7 +139,72 @@ anything; each section is generated with only its own numbered sources,
 and any `[n]` the model invents is stripped and counted. A digest stores
 the hash of its inputs, so re-running the script for an unchanged week
 makes no model call. Served at `/digests`, `/digests/latest`,
-`/digests/{week}` and on the Streamlit "This Week" page.
+`/digests/{week}` and on the site's home page.
+
+## Companies and funding
+
+Funding rounds are pulled out of funding news by a regex prefilter on the
+title, one Groq JSON call per article, schema validation, and a
+**rule-derived confidence**: `high` only when the company name and the
+amount both appear verbatim in the text the model saw, `medium` when the
+company does but the amount is absent or paraphrased, `low` otherwise.
+Rounds covered by several outlets are merged when company, round name,
+amount (±10%) and date (±14 days) agree, keeping every source article.
+Each article is processed once per version of its text.
+
+Measured on 41 hand-labelled articles (`data/eval/funding_labels.json`,
+`python scripts/evaluate_extraction.py`): is-a-round precision 1.000 /
+recall 0.931, company 27/27, amount 26/27 within 5%, round 10/10.
+
+Companies are resolved strictly and recomputed on every run: YC slug,
+then registered domain, then normalised name — and the name only when
+exactly one company has it. No fuzzy matching. "Which startups raised
+the most this month?" takes a structured path: the planner emits
+`intent: funding_ranking`, the rounds are sorted by amount in the
+database, and the model only writes the prose.
+
+`GET /funding` (largest first), `GET /companies`, `GET /companies/{slug}`.
+
+## Trends
+
+Topics are counted per ISO week from the tags each source already
+carries (GitHub topics, Hugging Face tags and paper keywords, YC tags,
+article categories), normalised to one spelling. A topic is *rising* when
+this week's count beats the mean of the four weeks before it:
+`score = (count − baseline) / sqrt(baseline + 1)`, with a minimum of 3
+mentions. Weeks with fewer than four prior weeks of data are flagged
+`insufficient_history` rather than dressed up as trends. Velocity —
+stars, likes, upvotes gained over a window — comes from the daily
+`metric_snapshots`, and needs two snapshots on different days to say
+anything; history starts the day the pipeline first runs and cannot be
+backfilled.
+
+`GET /trends?week=`, `GET /trends/velocity?type=repo&days=7`;
+`python scripts/compute_trends.py`.
+
+## Website
+
+`web/` is a Next.js app (App Router, TypeScript, Tailwind): the week's
+digest on the home page, ask, search, funding, companies, trends, digests
+and an about page with the methodology and the evaluation table. Pages
+are server-rendered against the API with a 10-minute cache, so a sleeping
+backend still serves the last good page; chat and search go through the
+site's own `/api/*` route handlers, so the browser never sees the backend
+and CORS never enters the picture. `npm run gen:api` regenerates
+`src/lib/openapi.d.ts` from the running API's `/openapi.json`.
+
+```bash
+cd web && cp .env.example .env.local     # API_URL=http://localhost:8000
+npm install && npm run dev               # http://localhost:3000
+npm run lint && npm run typecheck && npm run build
+```
+
+## Deployment
+
+See `DEPLOY.md`: MongoDB Atlas (M0) + a Hugging Face Docker Space for the
+API + GitHub Actions for the daily/weekly pipeline + Vercel for the site,
+all on free tiers. The API rebuilds its indexes from the vectors stored in
+MongoDB at boot, so the container carries no data.
 
 ## Quick start
 
@@ -155,7 +220,8 @@ python scripts/run_pipeline.py         # NER, embeddings, indexes, snapshots (in
 python scripts/setup_neo4j_schema.py   # optional; the pipeline syncs Neo4j when it is up
 
 python src/api/main.py                 # API -> localhost:8000/docs
-streamlit run src/ui/app.py            # UI  -> localhost:8501
+cd web && npm install && npm run dev  # site -> localhost:3000 (API_URL in web/.env.local)
+streamlit run tools/streamlit_app.py   # internal debug UI -> localhost:8501
 ```
 
 MongoDB must be running (`brew services start mongodb-community`). Neo4j is
@@ -248,6 +314,9 @@ grows, because the evaluation never reads the live database.
 | `GET`  | `/documents`              | Newest documents, filter by type/source/window |
 | `GET`  | `/documents/{id}`         | One document with its entities              |
 | `GET`  | `/digests`, `/digests/latest`, `/digests/{week}` | Weekly digests          |
+| `GET`  | `/funding`                | Extracted funding rounds, largest first   |
+| `GET`  | `/trends`, `/trends/velocity` | Rising topics; stars/likes gained     |
+| `GET`  | `/companies`, `/companies/{slug}` | Resolved companies with linked documents and rounds |
 | `POST` | `/similar`                | "More like this" by embedding             |
 | `POST` | `/graph/query`            | Read-only Cypher (bearer `ADMIN_TOKEN`)   |
 | `GET`  | `/graph/entities`         | Most-mentioned entities                   |
@@ -319,6 +388,11 @@ src/
     embed.py, index.py    E5 for stale docs; FAISS + BM25 from stored vectors
     snapshots.py          daily star/fork history per repo
   graph/neo4j_import.py   MongoDB -> Neo4j merge (used by the pipeline)
+  entities/resolve.py     companies from documents + rounds (slug > domain > unique name)
+  extraction/funding.py   funding rounds: prefilter -> LLM JSON -> validate -> confidence -> dedupe
+  trends/
+    topics.py             topic vocabulary from source tags
+    compute.py            weekly counts, rising score, velocity from snapshots
   digest/
     weeks.py              ISO week arithmetic
     select.py             the week's documents, grouped and ordered
@@ -334,12 +408,13 @@ src/
   database/               MongoDB + Neo4j clients
   llm/groq_client.py      Groq wrapper with model resolution
   api/main.py             FastAPI
-  ui/app.py               Streamlit
   config.py               all settings, from .env / environment
 scripts/
   ingest.py               fetch sources into MongoDB
   run_pipeline.py         process what changed
   generate_digest.py      write the week's digest (no-op if inputs unchanged)
+  evaluate_extraction.py  funding extraction vs hand labels
+  compute_trends.py       recount weekly topics, print what is rising
   update.sh               ingest + pipeline + API reload (what launchd runs)
   install_schedule.sh     install the launchd jobs
   build_indexes.py        alias: run_pipeline.py --stages refresh,embed,index
@@ -369,4 +444,5 @@ runs only the offline ones.
 ## Stack
 
 Python 3.13, MongoDB, Neo4j, FAISS, rank-bm25, intfloat/e5-base-v2, spaCy (en_core_web_trf),
-Groq, FastAPI, Streamlit, pytest.
+Groq, FastAPI, Next.js (App Router, TypeScript, Tailwind), pytest. Streamlit
+remains as an internal debug view in `tools/`.

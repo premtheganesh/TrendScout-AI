@@ -93,8 +93,14 @@ class TestPlanQuery:
                                      'location': 'Boston',
                                      'since_days': 30})
         plan = make_pipeline(llm=llm).plan_query('where is AI music in Boston?')
-        assert plan == {'search_query': 'AI music', 'type': 'startup',
+        assert plan == {'intent': 'search', 'search_query': 'AI music', 'type': 'startup',
                         'location': 'Boston', 'since_days': 30}
+
+    def test_intent_is_validated(self):
+        llm = StubLLM(json_response={'search_query': 'x', 'intent': 'funding_ranking'})
+        assert make_pipeline(llm=llm).plan_query('q')['intent'] == 'funding_ranking'
+        llm = StubLLM(json_response={'search_query': 'x', 'intent': 'teleport'})
+        assert make_pipeline(llm=llm).plan_query('q')['intent'] == 'search'
 
     def test_since_days_is_clamped_and_validated(self):
         assert clamp_since_days(7) == 7

@@ -54,6 +54,50 @@ def _in_week(start: datetime, end: datetime) -> Dict[str, Any]:
     return {'event_at': {'$gte': start, '$lt': end}}
 
 
+def round_summary(r: Dict[str, Any]) -> str:
+    amount = f"${r['amount_usd']:,.0f}" if r.get('amount_usd') else (
+        f"{r['amount']:,.0f} {r['currency']}" if r.get('amount') and r.get('currency') else 'an undisclosed amount')
+    parts = [f"{r.get('company', '?')} raised {amount}"]
+    if r.get('round'):
+        parts.append(f"({r['round']})")
+    if r.get('lead_investors'):
+        parts.append('led by ' + ', '.join(r['lead_investors'][:3]))
+    if r.get('announced_at'):
+        parts.append(f"on {r['announced_at'].date().isoformat()}")
+    return ' '.join(parts) + '.'
+
+
+def funding_for_week(db, start: datetime, end: datetime) -> List[Dict[str, Any]]:
+    """Structured rounds first (largest first), each represented by its
+    primary article with the round summary attached; then any remaining
+    funding-titled articles, newest first."""
+    from bson import ObjectId
+    docs = db[COLLECTION]
+    chosen, seen = [], set()
+
+    rounds = db['funding_rounds'].find({
+        'announced_at': {'$gte': start, '$lt': end},
+        'confidence': {'$in': ['high', 'medium']},
+    }).sort([('amount_usd', -1), ('company', 1)])
+    for r in rounds:
+        for doc_id in r.get('source_doc_ids', []):
+            if doc_id in seen or not ObjectId.is_valid(doc_id):
+                continue
+            doc = docs.find_one({'_id': ObjectId(doc_id)}, PROJECTION)
+            if doc is None:
+                continue
+            doc['round_summary'] = round_summary(r)
+            doc['round_amount_usd'] = r.get('amount_usd') or 0
+            chosen.append(doc)
+            seen.add(doc_id)
+            break
+
+    rest = [d for d in docs.find({**_in_week(start, end), 'type': 'article'}, PROJECTION)
+            if str(d['_id']) not in seen and FUNDING_TITLE.search(d.get('title') or '')]
+    rest.sort(key=lambda d: (-(d['event_at'].timestamp()), d.get('title') or ''))
+    return chosen + rest
+
+
 def select_week(db, week: str, start: datetime, end: datetime) -> Selection:
     docs = db[COLLECTION]
     window = _in_week(start, end)
@@ -62,9 +106,7 @@ def select_week(db, week: str, start: datetime, end: datetime) -> Selection:
     launches += list(docs.find({**window, 'type': 'startup'}, PROJECTION))
     launches.sort(key=lambda d: (-(d.get('points') or 0), -(d['event_at'].timestamp()), d.get('title') or d.get('name') or ''))
 
-    funding = [d for d in docs.find({**window, 'type': 'article'}, PROJECTION)
-               if FUNDING_TITLE.search(d.get('title') or '')]
-    funding.sort(key=lambda d: (-(d['event_at'].timestamp()), d.get('title') or ''))
+    funding = funding_for_week(db, start, end)
 
     repos = list(docs.find({**window, 'type': 'repo'}, PROJECTION))
     repos.sort(key=lambda d: (-(d.get('stars') or 0), d.get('full_name') or ''))

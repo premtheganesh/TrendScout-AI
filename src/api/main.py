@@ -329,6 +329,9 @@ def root():
             "stats": "/stats",
             "documents": "/documents",
             "digests": "/digests",
+            "funding": "/funding",
+            "companies": "/companies",
+            "trends": "/trends",
             "health": "/health",
             "meta": "/meta",
             "admin_reload": "/admin/reload",
@@ -527,88 +530,62 @@ def execute_cypher_query(request: CypherQueryRequest):
 
 @app.get("/graph/entities")
 def get_top_entities(
-    entity_type: Optional[str] = None,
-    limit: int = Query(default=10, le=100) # Max 100 results
+    entity_type: Optional[str] = Query(default=None, max_length=20),
+    limit: int = Query(default=10, ge=1, le=100),
 ):
     """
-    Get most mentioned entities from knowledge graph
+    Most-mentioned entities. Read from MongoDB's canonical_entities — the
+    same links graph-expansion retrieval uses — so this works with Neo4j
+    off, which is how the deployed site runs.
 
-    Parameters:
-    - entity_type: Filter by type (ORG, PERSON, PRODUCT, etc.)
-    - limit: Number of results (max 100)
-
-    Try: http://localhost:8000/graph/entities?entity_type=ORG&limit=5
+    Try: /graph/entities?entity_type=ORG&limit=5
     """
-
-    require_neo4j()
-    try:
-        # Build Cypher query
-        if entity_type:
-            query = """
-            MATCH (e:Entity {entity_type: $entity_type})
-            RETURN e.entity_text AS entity, e.entity_type AS type, e.mention_count AS mentions
-            ORDER BY e.mention_count DESC
-            LIMIT $limit
-            """
-            parameters = {"entity_type": entity_type, "limit": limit}
-        else:
-            query = """
-            MATCH (e:Entity)
-            RETURN e.entity_text AS entity, e.entity_type AS type, e.mention_count AS mentions
-            ORDER BY e.mention_count DESC
-            LIMIT $limit
-            """
-            parameters = {"limit": limit}
-
-        results = neo4j_client.run_query(query, parameters)
-        entities = [dict(record) for record in results]
-
-        return {
-            "entities": entities,
-            "count": len(entities)
-        }
-
-    except Exception as e:
-        logger.error(f"Entity query error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    query: Dict[str, Any] = {}
+    if entity_type:
+        query['entity_type'] = entity_type.upper()
+    rows = search_engine.mongo.db.canonical_entities.find(
+        query, {'entity_text': 1, 'entity_type': 1, 'mention_count': 1, 'document_count': 1}
+    ).sort([('mention_count', -1), ('entity_text', 1)]).limit(limit)
+    entities = [{'entity': r['entity_text'], 'type': r['entity_type'],
+                 'mentions': r.get('mention_count', 0), 'documents': r.get('document_count', 0)}
+                for r in rows]
+    return {"entities": entities, "count": len(entities)}
 
 
 @app.get("/graph/startup/{startup_name}")
 def get_startup_entities(startup_name: str):
     """
-    Get all entities mentioned by a specific startup
+    Entities mentioned by one startup, and the other documents that share
+    them (the graph neighbourhood). Exact name match, case-insensitive.
 
-    Try: http://localhost:8000/graph/startup/Suno
+    Try: /graph/startup/Suno
     """
+    db = search_engine.mongo.db
+    doc = db.documents.find_one(
+        {'type': 'startup', 'name': {'$regex': f'^{re.escape(startup_name)}$', '$options': 'i'}},
+        {'embedding': 0})
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Startup '{startup_name}' not found")
 
-    require_neo4j()
-    try:
-        query = """
-        MATCH (s:Startup {name: $startup_name})-[:MENTIONS]->(e:Entity)
-        RETURN e.entity_text AS entity, e.entity_type AS type
-        ORDER BY e.entity_type, e.entity_text
-        """
+    entities = sorted(
+        ({'entity': e.get('entity_text'), 'type': e.get('entity_type'), 'count': e.get('count', 1)}
+         for e in (doc.get('entities') or []) if e.get('entity_text')),
+        key=lambda e: (e['type'] or '', e['entity']))
 
-        results = neo4j_client.run_query(query, {"startup_name": startup_name})
-        entities = [dict(record) for record in results]
+    neighbours = search_engine.graph.expand([str(doc['_id'])], top_k=10)
+    hydrated = search_engine._fetch_documents([n['doc_id'] for n in neighbours])
+    for n in neighbours:
+        d = hydrated.get(n['doc_id'])
+        n['title'] = document_title(d, n['type']) if d else ''
+        n['url'] = document_url(d, n['type']) if d else ''
 
-        if not entities:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Startup '{startup_name}' not found or has no entities"
-            )
-
-        return {
-            "startup": startup_name,
-            "entities": entities,
-            "count": len(entities)
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Startup entities error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "startup": doc.get('name'),
+        "doc_id": str(doc['_id']),
+        "entities": entities,
+        "count": len(entities),
+        "neighbours": neighbours,
+    }
 
 
 # --- Documents ---
@@ -667,6 +644,95 @@ def get_document(doc_id: str):
     public = _public(doc)
     public['entities'] = doc.get('entities') or []
     return public
+
+
+# --- Companies and funding ---
+
+@app.get("/funding")
+def list_funding(
+    since_days: Optional[int] = Query(default=None, ge=1, le=MAX_SINCE_DAYS),
+    min_amount_usd: Optional[float] = Query(default=None, ge=0),
+    round: Optional[str] = Query(default=None, max_length=20),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """Extracted funding rounds, largest first."""
+    query: Dict[str, Any] = {'confidence': {'$in': ['high', 'medium']}}
+    if since_days:
+        query['announced_at'] = {'$gte': datetime.now(timezone.utc) - timedelta(days=since_days)}
+    if min_amount_usd is not None:
+        query['amount_usd'] = {'$gte': min_amount_usd}
+    if round:
+        query['round'] = round.lower()
+    rows = list(search_engine.mongo.db.funding_rounds.find(query)
+                .sort([('amount_usd', -1), ('announced_at', -1)]).limit(limit))
+    return {'items': rows, 'count': len(rows),
+            'total': search_engine.mongo.db.funding_rounds.count_documents(query)}
+
+
+@app.get("/companies")
+def list_companies(
+    q: Optional[str] = Query(default=None, max_length=100),
+    sort: str = Query(default='funding', pattern='^(funding|documents|name)$'),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10000),
+):
+    query: Dict[str, Any] = {}
+    if q:
+        query['name'] = {'$regex': re.escape(q), '$options': 'i'}
+    order = {'funding': [('funding_total_usd', -1), ('document_count', -1)],
+             'documents': [('document_count', -1)], 'name': [('name', 1)]}[sort]
+    rows = list(search_engine.mongo.db.companies.find(query).sort(order).skip(offset).limit(limit))
+    return {'items': rows, 'count': len(rows),
+            'total': search_engine.mongo.db.companies.count_documents(query),
+            'offset': offset, 'limit': limit}
+
+
+@app.get("/companies/{slug}")
+def get_company(slug: str):
+    db = search_engine.mongo.db
+    company = db.companies.find_one({'_id': slug})
+    if company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    company['rounds'] = list(db.funding_rounds.find({'_id': {'$in': company.get('rounds', [])}})
+                             .sort([('announced_at', -1)]))
+    linked = []
+    for doc_type, ids in (company.get('doc_ids') or {}).items():
+        for doc in db.documents.find({'_id': {'$in': [ObjectId(i) for i in ids if ObjectId.is_valid(i)]}},
+                                     {'embedding': 0, 'entities': 0}):
+            linked.append(_public(doc))
+    linked.sort(key=lambda d: (d.get('event_at') or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+    company['documents'] = linked
+    return company
+
+
+# --- Trends ---
+
+@app.get("/trends")
+def trends(week: Optional[str] = Query(default=None, pattern=r'^\d{4}-W\d{2}$'),
+           limit: int = Query(default=20, ge=1, le=100)):
+    """Rising and most-mentioned topics for an ISO week (default: current)."""
+    from src.digest.weeks import week_id
+    from src.trends.compute import rising_topics
+    week = week or week_id(datetime.now(timezone.utc).date())
+    return rising_topics(search_engine.mongo.db, week, limit=limit)
+
+
+@app.get("/trends/velocity")
+def trends_velocity(type: str = Query(default='repo', pattern='^(repo|model|paper|launch)$'),
+                    days: int = Query(default=7, ge=2, le=90),
+                    limit: int = Query(default=20, ge=1, le=100)):
+    """Documents that gained the most stars / likes / upvotes / points in the window."""
+    from src.trends.compute import velocity
+    result = velocity(search_engine.mongo.db, type, days=days, limit=limit)
+    ids = [ObjectId(r['doc_id']) for r in result['items'] if ObjectId.is_valid(r['doc_id'])]
+    docs = {str(d['_id']): _public(d) for d in
+            search_engine.documents.find({'_id': {'$in': ids}}, {'embedding': 0, 'entities': 0})}
+    for row in result['items']:
+        doc = docs.get(row['doc_id'])
+        if doc:
+            row['title'] = doc['title']
+            row['url'] = doc['url']
+    return result
 
 
 # --- Digests ---
