@@ -69,6 +69,13 @@ class HybridSearchEngine:
         index_path = os.path.join(self.index_dir, 'faiss_index.bin')
         metadata_path = os.path.join(self.index_dir, 'faiss_metadata.pkl')
 
+        if not os.path.exists(index_path) and get_settings().index_build_on_boot:
+            # Deployed API: no index files on disk, but every vector is in
+            # MongoDB. Rebuilding is sub-second per few thousand documents.
+            from src.pipeline.index import build_indexes
+            logger.info("No index files; building from stored vectors")
+            build_indexes(self.mongo.db, self.index_dir)
+
         if not os.path.exists(index_path):
             raise FileNotFoundError(
                 f"FAISS index not found at {index_path}. "

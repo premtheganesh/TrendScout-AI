@@ -1,7 +1,9 @@
 """
-Streamlit frontend. Requires the API on http://localhost:8000.
+Internal debug UI (Streamlit). The public frontend is the Next.js app in
+web/; this one stays because it shows per-channel ranks, the raw plan and
+graph entities, which are useful when tuning retrieval.
 
-    streamlit run src/ui/app.py
+    streamlit run tools/streamlit_app.py
 """
 
 import streamlit as st

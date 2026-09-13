@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # A relative path resolves against the repository root, so the live
     # corpus and the frozen evaluation corpus can keep separate indexes.
     index_dir: str = 'data'
+    # Build FAISS + BM25 from the vectors stored in MongoDB when the files are
+    # missing (deployments with an ephemeral disk). Local dev keeps files.
+    index_build_on_boot: bool = False
 
     # --- Models ---
     embedding_model: str = 'intfloat/e5-base-v2'

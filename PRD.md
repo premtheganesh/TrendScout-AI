@@ -3,7 +3,7 @@
 Living document. Updated at the end of every phase with what was built,
 what changed from the plan, and the measured numbers.
 
-Last updated: 2026-09-13 (Phases 8–10)
+Last updated: 2026-09-13 (Phases 8–11)
 
 ---
 
@@ -183,7 +183,7 @@ this file.
 | 8 | Companies + funding | ✅ done 2026-09-13 |
 | 9 | Trends | ✅ done 2026-09-12 |
 | 10 | Next.js frontend | ✅ done 2026-09-13 |
-| 11 | Deploy (Atlas + HF Spaces + GitHub Actions + Vercel) | ⬜ |
+| 11 | Deploy (Atlas + HF Spaces + GitHub Actions + Vercel) | ✅ deploy-ready 2026-09-13 (accounts pending) |
 
 Acceptance criteria per phase are in the phase log below and are checked
 before the phase is marked done.
@@ -450,8 +450,34 @@ Planned:
 
 Acceptance:
 - Production build served on a private port: every page 200 with content (`h1` checked), `/digests/1999-W01` and `/documents/not-an-id` → 404, `/api/search` returns 20 hydrated results with per-channel ranks, empty query → 400
-- `/api/chat` round-trips (verified after the funding extraction released Groq's rate limit)
+- `/api/chat` round-trips: "Which startups raised the most money this month?" → `intent=funding_ranking`, 8 sources (Databricks $5B, Mistral $3.24B, Cognition $2B…); prose generation hit Groq's daily cap and the API returned its honest "answer generation failed" message with the sources intact
 
 Deviations from plan:
 - `LayoutProps` (a type Next generates only after a build) replaced with an explicit props type so `tsc --noEmit` works from a clean checkout.
 - A small markdown renderer was written instead of adding a dependency: the digest and answers are bullets, bold and `[n]` citations, which become anchors to the numbered source.
+
+### Phase 11 — Deploy (2026-09-13) — deploy-ready, accounts pending
+
+Planned:
+- [x] `INDEX_BUILD_ON_BOOT`: the API rebuilds FAISS + BM25 from the vectors stored in MongoDB when no index files exist (ephemeral disk); tested in `test_indexes_can_be_rebuilt_from_stored_vectors_at_boot`
+- [x] `Dockerfile` (python 3.13-slim, CPU torch, embedding model baked in, non-root, port 7860, healthcheck) + `.dockerignore`; `requirements/api.txt` (serving) and `requirements/pipeline.txt` (ingestion + NER); root `requirements.txt` stays the dev superset
+- [x] `.github/workflows/daily.yml` (07:30 UTC), `weekly.yml` (Mon 08:00 UTC: sources → pipeline → previous week's digest → reload), `tests.yml` (offline tests + web lint/typecheck on push)
+- [x] `deploy/huggingface/README.md` (Space card, `sdk: docker`, `app_port: 7860`); `scripts/copy_database.py --to <atlas uri>` copies every collection with plain pymongo and recreates indexes
+- [x] `DEPLOY.md`: exact steps for Atlas (two users: read-only for the API, readWrite for the pipeline), the Space, the Actions secrets, Vercel (root `web`, `API_URL`), plus limits (Groq 200k tokens/day, Actions auto-disable after 60 idle days, Spaces sleep after 48 h)
+
+Acceptance (what could be verified without cloud accounts):
+- **Image builds** (3.05 GB) and **boots against the local database in 10 s**: `/health` → 3,898 documents / 3,898 vectors built from stored vectors, `/search` answers, `/admin/reload` → 401 without the token and reloads with it
+- Split requirements install cleanly inside the image; the first build exposed that host directory modes are copied (`/app/src/api` unreadable by the non-root user) — fixed with a `chmod` in the Dockerfile
+
+Not done, needs the user's accounts (cannot be done for them): creating the Atlas cluster and users, the Hugging Face Space, the Vercel project, and pasting the secrets. Every step is in `DEPLOY.md`; after them, the acceptance is "the public URL answers a chat question" and "a manually dispatched Actions run updates `/meta` within 15 minutes".
+
+Deviations from plan:
+- Cold start was estimated at 60–90 s; measured **10 s**, because the embedding model is baked into the image instead of downloaded at boot.
+- Docker Desktop, the test API and the Next.js server resident at once pushed the Mac into swap (23 GB used) and macOS killed the background extraction once; it resumed where it stopped. Two five-day-old copies of the user's own API on port 8000 were also found and, with permission, killed.
+
+### What remains open (whole roadmap)
+
+- Deployment itself (accounts + secrets) — `DEPLOY.md`.
+- Replace the dead `GITHUB_TOKEN` in `.env`; start Neo4j Desktop's database once so the `neo4j` pipeline stage can run (everything public works without it).
+- Re-label the 22-query evaluation set against the live corpus before the course report (the frozen 210-document corpus still guards regressions at 0.882).
+- 14 funding articles are queued behind Groq's daily cap; tomorrow's daily job extracts them.

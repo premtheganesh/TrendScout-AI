@@ -1,0 +1,14 @@
+.venv
+web
+data
+backups
+logs
+docs
+tests
+notebooks
+.git
+.github
+*.dump
+**/__pycache__
+.pytest_cache
+.env

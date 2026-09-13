@@ -19,6 +19,20 @@ class TestRealSearch:
     def test_faiss_dimension_matches_the_model(self, engine):
         assert engine.faiss_index.d == engine.generator.dimension == 768
 
+    def test_indexes_can_be_rebuilt_from_stored_vectors_at_boot(self, tmp_path, monkeypatch):
+        """What a deployed API with an ephemeral disk does on every start."""
+        from src.config import get_settings
+        from src.search.hybrid_search import HybridSearchEngine
+        monkeypatch.setenv('INDEX_BUILD_ON_BOOT', 'true')
+        get_settings.cache_clear()
+        try:
+            booted = HybridSearchEngine(index_dir=str(tmp_path))
+            assert booted.faiss_index.ntotal == len(booted.bm25) > 0
+            assert (tmp_path / 'faiss_index.bin').exists()
+            booted.close()
+        finally:
+            get_settings.cache_clear()
+
     def test_known_query_finds_the_obvious_document(self, engine):
         results = engine.search('AI music generation startup', top_k=5)
         assert results

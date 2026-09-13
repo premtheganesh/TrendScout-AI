@@ -1,0 +1,11 @@
+# Ingestion + processing (what GitHub Actions runs). Superset of api.txt
+# plus NER and the sources' HTTP/parsing needs. Playwright is deliberately
+# absent: the one Playwright source (StartupSavant) is monthly and local.
+-r api.txt
+spacy==3.8.9
+scikit-learn==1.7.2
+requests==2.32.5
+beautifulsoup4==4.12.3
+lxml==6.0.2
+feedparser==6.0.11
+pandas==2.2.3
