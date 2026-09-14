@@ -479,7 +479,7 @@ Deviations from plan:
 
 ### What remains open (whole roadmap)
 
-- Deployment: **MongoDB Atlas is live** (cluster `trendscout`, 26 MB copied, 2026-09-13) and the **GitHub Actions weekly job ran green against it** (run 34781127768: 10 sources, pipeline 97 s, digest verified unchanged). Still pending: the Hugging Face Space for the API and the Vercel site — `DEPLOY.md` steps 2 and 4.
+- Deployment: **MongoDB Atlas is live** (cluster `trendscout`, 26 MB copied, 2026-09-13) and the **GitHub Actions weekly job ran green against it** (run 34781127768: 10 sources, pipeline 97 s, digest verified unchanged). **Decision (2026-09-13): the API and site are not hosted.** Hugging Face Docker Spaces turned out to be paid, and every host with enough memory requires a card; the user chose to keep the interactive part local ("run it" in the README) with the data pipeline live in the cloud. `DEPLOY.md` keeps the steps for later.
 - Replace the dead `GITHUB_TOKEN` in `.env`; start Neo4j Desktop's database once so the `neo4j` pipeline stage can run (everything public works without it).
 - Re-label the 22-query evaluation set against the live corpus before the course report (the frozen 210-document corpus still guards regressions at 0.882).
 - ~~14 funding articles are queued behind Groq's daily cap~~ — extracted on 2026-09-13.

@@ -77,8 +77,18 @@ Full details — data model, every source, the retrieval evaluation and
 ablations, the pipeline stages, the API — are in
 [ARCHITECTURE.md](ARCHITECTURE.md). The plan and the log of every phase,
 including what the two independent review passes found and fixed, are in
-[PRD.md](PRD.md). Deployment (free tiers: MongoDB Atlas, a Hugging Face
-Docker Space, GitHub Actions, Vercel) is in [DEPLOY.md](DEPLOY.md).
+[PRD.md](PRD.md). The data pipeline runs in the cloud (MongoDB Atlas + a GitHub Actions
+job every Monday); the API and the site run locally on demand — hosting
+them is optional and described in [DEPLOY.md](DEPLOY.md).
+
+## What runs where
+
+The **data side is live and unattended**: a GitHub Actions job runs every
+Monday, ingests all eleven sources into MongoDB Atlas, processes what
+changed, and writes the week's digest. The **API and the site run locally**
+(two commands, below) — they read Atlas or a local MongoDB. Hosting them
+publicly is optional (`DEPLOY.md`): the API needs a ~2 GB container, and
+the free tiers that fit it all require a payment card.
 
 ## Run it
 

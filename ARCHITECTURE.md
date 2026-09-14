@@ -192,10 +192,11 @@ npm run lint && npm run typecheck && npm run build
 
 ## Deployment
 
-See `DEPLOY.md`: MongoDB Atlas (M0) + a Hugging Face Docker Space for the
-API + GitHub Actions for the daily/weekly pipeline + Vercel for the site,
-all on free tiers. The API rebuilds its indexes from the vectors stored in
-MongoDB at boot, so the container carries no data.
+See `DEPLOY.md`. Deployed today: MongoDB Atlas (M0) + the GitHub Actions
+weekly job. Not deployed by choice: the API and the site (every host with
+the API's ~2 GB needs a payment card). The API can rebuild its indexes
+from the vectors stored in MongoDB at boot, so a container would carry no
+data.
 
 ## Quick start
 

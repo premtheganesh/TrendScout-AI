@@ -1,4 +1,15 @@
-# Deploying TrendScout AI (free tier)
+# Deploying TrendScout AI
+
+**Status (2026-09-13):** the data pipeline is deployed — MongoDB Atlas holds
+the corpus and the GitHub Actions weekly job refreshes it. The API and the
+site are run locally on demand. The hosting steps below are written and
+tested as far as a container build, but not carried out: Hugging Face
+Docker Spaces became paid, and every host with the 2 GB the API needs
+(Modal, Google Cloud Run, Oracle) asks for a payment card. If you host it
+later, Modal is the least work — its free credit resets monthly and this
+API uses a small fraction of it.
+
+# The full setup, for when you want it
 
 Four pieces, all free: MongoDB Atlas holds the data, GitHub Actions runs the
 pipeline on a schedule, a Hugging Face Space serves the API, Vercel serves
